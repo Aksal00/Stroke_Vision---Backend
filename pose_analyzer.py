@@ -1,149 +1,181 @@
-#pose_analyzer.py
-
 import cv2
 import mediapipe as mp
 import numpy as np
 import os
-from tkinter import messagebox
+import logging
+from typing import List, Dict, Any
+
+# Import visualization modules
 from visualization import visualize_landmark_data
 from highlight_generator import export_highlight_clips
 
+# Set up logging
+logger = logging.getLogger(__name__)
 
-def analyze_cricket_landmarks(video_path, output_path):
+
+def analyze_cricket_landmarks(
+        model_path: str,
+        video_path: str,
+        output_path: str,
+        batch_size: int = 100
+) -> bool:
     """
-    Main function to analyze cricket player's pose and movements from a video.
+    Analyze cricket player's pose and movements from a video.
 
     Args:
-        video_path (str): Path to the input video file.
-        output_path (str): Path where the analyzed video will be saved.
+        model_path: Path to the shot classification model
+        video_path: Path to the input video file
+        output_path: Path where analyzed video will be saved
+        batch_size: Number of frames to process at a time
 
     Returns:
-        bool: True if analysis completed successfully, False otherwise.
+        bool: True if analysis completed successfully
     """
-    # Initialize MediaPipe Pose
-    mp_pose = mp.solutions.pose
-    pose = mp_pose.Pose(
-        static_image_mode=False,
-        model_complexity=1,
-        smooth_landmarks=True,
-        enable_segmentation=False,
-        smooth_segmentation=True,
-        min_detection_confidence=0.5,
-        min_tracking_confidence=0.5
-    )
-    mp_drawing = mp.solutions.drawing_utils
+    logger.info(f"Starting video analysis: {video_path}")
 
-    # Open the video file
+    # Initialize MediaPipe Pose
+    try:
+        mp_pose = mp.solutions.pose
+        pose = mp_pose.Pose(
+            static_image_mode=False,
+            model_complexity=1,
+            smooth_landmarks=True,
+            enable_segmentation=False,
+            smooth_segmentation=True,
+            min_detection_confidence=0.5,
+            min_tracking_confidence=0.5
+        )
+        mp_drawing = mp.solutions.drawing_utils
+    except Exception as e:
+        logger.error(f"Failed to initialize MediaPipe: {e}")
+        return False
+
+    # Open video file
     cap = cv2.VideoCapture(video_path)
     if not cap.isOpened():
-        messagebox.showerror("Error", "Could not open video file")
+        logger.error(f"Could not open video file: {video_path}")
         return False
 
     # Get video properties
     fps = cap.get(cv2.CAP_PROP_FPS)
     width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
     height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
 
-    # Create VideoWriter for output
+    logger.info(f"Video properties: {width}x{height} @ {fps}fps, {total_frames} frames")
+
+    # Prepare output
     fourcc = cv2.VideoWriter_fourcc(*'mp4v')
     out = cv2.VideoWriter(output_path, fourcc, fps, (width, height))
+    if not out.isOpened():
+        logger.error(f"Could not create output video: {output_path}")
+        cap.release()
+        return False
 
-    # Create a progress window
-    cv2.namedWindow('Processing Video - Press Q to cancel', cv2.WINDOW_NORMAL)
-    cv2.resizeWindow('Processing Video - Press Q to cancel', 800, 600)
-
-    # Data collection for landmarks
-    landmark_data = []
+    # Data collection
+    landmark_data: List[Dict[str, Any]] = []
+    original_frames: List[np.ndarray] = []
     frame_count = 0
-    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-    timestamps = []
 
-    # Store original frames for highlight clips
-    original_frames = []
+    try:
+        while cap.isOpened():
+            ret, frame = cap.read()
+            if not ret:
+                break
 
-    while cap.isOpened():
-        ret, frame = cap.read()
-        if not ret:
-            break
+            frame_count += 1
+            current_time = frame_count / fps
 
-        frame_count += 1
-        current_time = frame_count / fps
-        timestamps.append(current_time)
+            # Store original frame
+            original_frames.append(frame.copy())
+            if len(original_frames) > batch_size:
+                original_frames.pop(0)  # Keep only the most recent frames
 
-        # Store original frame for highlight clips
-        original_frames.append(frame.copy())
+            # Process pose estimation
+            try:
+                image = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                results = pose.process(image)
+                image = cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
 
-        # Process pose estimation
-        image = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        results = pose.process(image)
-        image = cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
+                # Initialize frame data
+                frame_data = {'frame': frame_count, 'time': current_time}
 
-        # Initialize frame data
-        frame_data = {'frame': frame_count, 'time': current_time}
+                # Draw pose annotations and collect data
+                if results.pose_landmarks:
+                    mp_drawing.draw_landmarks(
+                        image,
+                        results.pose_landmarks,
+                        mp_pose.POSE_CONNECTIONS,
+                        mp_drawing.DrawingSpec(color=(0, 255, 0), thickness=2, circle_radius=2),
+                        mp_drawing.DrawingSpec(color=(0, 0, 255), thickness=2)
+                    )
 
-        # Draw pose annotations and collect data
-        if results.pose_landmarks:
-            mp_drawing.draw_landmarks(
-                image,
-                results.pose_landmarks,
-                mp_pose.POSE_CONNECTIONS,
-                mp_drawing.DrawingSpec(color=(0, 255, 0), thickness=2, circle_radius=2),
-                mp_drawing.DrawingSpec(color=(0, 0, 255), thickness=2)
-            )
+                    # Store landmark data (fixed indentation issue)
+                    landmarks = results.pose_landmarks.landmark
+                    for idx, landmark in enumerate(landmarks):
+                        frame_data[f'landmark_{idx}_x'] = landmark.x
+                        frame_data[f'landmark_{idx}_y'] = landmark.y
+                        frame_data[f'landmark_{idx}_z'] = landmark.z
+                        frame_data[f'landmark_{idx}_visibility'] = landmark.visibility
 
-            # Highlight important cricket joints and collect their positions
-            landmarks = results.pose_landmarks.landmark
-            for idx, landmark in enumerate(landmarks):
-                x = int(landmark.x * width)
-                y = int(landmark.y * height)
+                        # Highlight important cricket joints
+                        if idx in [mp_pose.PoseLandmark.LEFT_SHOULDER.value,
+                                  mp_pose.PoseLandmark.RIGHT_SHOULDER.value,
+                                  mp_pose.PoseLandmark.LEFT_ELBOW.value,
+                                  mp_pose.PoseLandmark.RIGHT_ELBOW.value,
+                                  mp_pose.PoseLandmark.LEFT_WRIST.value,
+                                  mp_pose.PoseLandmark.RIGHT_WRIST.value,
+                                  mp_pose.PoseLandmark.LEFT_HIP.value,
+                                  mp_pose.PoseLandmark.RIGHT_HIP.value,
+                                  mp_pose.PoseLandmark.LEFT_KNEE.value,
+                                  mp_pose.PoseLandmark.RIGHT_KNEE.value]:
+                            x = int(landmark.x * width)
+                            y = int(landmark.y * height)
+                            cv2.circle(image, (x, y), 5, (255, 0, 0), -1)
 
-                # Store normalized coordinates (0-1 range)
-                frame_data[f'landmark_{idx}_x'] = landmark.x
-                frame_data[f'landmark_{idx}_y'] = landmark.y
-                frame_data[f'landmark_{idx}_z'] = landmark.z
-                frame_data[f'landmark_{idx}_visibility'] = landmark.visibility
+                    # Add progress text
+                    progress_text = f"Processing: {frame_count}/{total_frames} frames ({int(frame_count / total_frames * 100)}%)"
+                    cv2.putText(image, progress_text, (20, 40), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 255), 2)
 
-                # Draw important landmarks
-                if idx in [mp_pose.PoseLandmark.LEFT_SHOULDER.value,
-                           mp_pose.PoseLandmark.RIGHT_SHOULDER.value,
-                           mp_pose.PoseLandmark.LEFT_ELBOW.value,
-                           mp_pose.PoseLandmark.RIGHT_ELBOW.value,
-                           mp_pose.PoseLandmark.LEFT_WRIST.value,
-                           mp_pose.PoseLandmark.RIGHT_WRIST.value,
-                           mp_pose.PoseLandmark.LEFT_HIP.value,
-                           mp_pose.PoseLandmark.RIGHT_HIP.value,
-                           mp_pose.PoseLandmark.LEFT_KNEE.value,
-                           mp_pose.PoseLandmark.RIGHT_KNEE.value]:
-                    cv2.circle(image, (x, y), 5, (255, 0, 0), -1)
+                    # Write frame
+                    out.write(image)
 
-        # Add frame data to collection
-        landmark_data.append(frame_data)
+                    # Add frame data
+                    landmark_data.append(frame_data)
 
-        # Add progress text
-        progress_text = f"Processing: {frame_count}/{total_frames} frames ({int(frame_count / total_frames * 100)}%)"
-        cv2.putText(image, progress_text, (20, 40), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 255), 2)
+                    # Log progress
+                    if frame_count % 100 == 0 or frame_count == total_frames:
+                        logger.info(f"Processed {frame_count}/{total_frames} frames")
 
-        # Write frame to output video
-        out.write(image)
+            except Exception as e:
+                logger.error(f"Error processing frame {frame_count}: {e}")
+                continue
 
-        # Display the frame with progress
-        cv2.imshow('Processing Video - Press Q to cancel', image)
-        if cv2.waitKey(1) & 0xFF == ord('q'):
-            break
+    except Exception as e:
+        logger.error(f"Error during video processing: {e}")
+        return False
 
-    # Release resources
-    cap.release()
-    out.release()
-    cv2.destroyAllWindows()
-    pose.close()
+    finally:
+        # Release resources
+        cap.release()
+        out.release()
+        pose.close()
+        logger.info("Released video resources")
 
-    # Process and visualize landmark data
+    # Process landmark data if we have results
     if landmark_data:
-        # Get peaks for highlight extraction
+        logger.info("Analyzing landmark data")
         peaks_info = visualize_landmark_data(landmark_data, os.path.dirname(output_path))
 
-        # Create highlight clips around peaks
-        if peaks_info is not None and peaks_info.shape[0] > 0:
-            export_highlight_clips(video_path, original_frames, peaks_info, fps, os.path.dirname(output_path))
+        if peaks_info is not None and not peaks_info.empty:
+            logger.info("Exporting highlight clips")
+            export_success = export_highlight_clips(
+                model_path, video_path, original_frames, peaks_info, fps, os.path.dirname(output_path))
 
+            if not export_success:
+                logger.warning("Highlight clip export failed")
+        else:
+            logger.warning("No significant movements detected")
+
+    logger.info("Analysis complete")
     return True

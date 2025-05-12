@@ -2,12 +2,12 @@
 
 import os
 import cv2
+import matplotlib
 import numpy as np
 import pandas as pd
 import mediapipe as mp
-from tkinter import messagebox
 from matplotlib import pyplot as plt
-
+matplotlib.use('Agg')
 
 def classify_pullshot_type(highlight_clip_path, output_folder):
     """
@@ -39,7 +39,7 @@ def classify_pullshot_type(highlight_clip_path, output_folder):
     # Get video properties
     cap = cv2.VideoCapture(highlight_clip_path)
     if not cap.isOpened():
-        messagebox.showerror("Error", f"Could not open video file: {highlight_clip_path}")
+        print("Error", f"Could not open video file: {highlight_clip_path}")
         return "Classification failed: Could not open video"
 
     fps = cap.get(cv2.CAP_PROP_FPS)
@@ -159,7 +159,7 @@ def classify_pullshot_type(highlight_clip_path, output_folder):
     plt.savefig(plot_path)
     plt.close()
 
-    messagebox.showinfo(
+    print(
         "Pull Shot Classification Complete",
         f"Analysis complete!\n\n{report}\n\nResults saved to:\n{pullshot_folder}"
     )
@@ -182,5 +182,5 @@ def process_pullshot_classification(highlight_clip_path, output_folder):
         return classify_pullshot_type(highlight_clip_path, output_folder)
     except Exception as e:
         error_msg = f"Error during pull shot classification: {str(e)}"
-        messagebox.showerror("Classification Error", error_msg)
+        print("Classification Error", error_msg)
         return error_msg

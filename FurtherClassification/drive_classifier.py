@@ -2,18 +2,18 @@
 
 import os
 import cv2
+import matplotlib
 import numpy as np
 import pandas as pd
 import mediapipe as mp
-from tkinter import messagebox
-
 from matplotlib import pyplot as plt
+matplotlib.use('Agg')
 
 
 def classify_drive_type(highlight_clip_path, output_folder):
     """
     Further classify a drive into front foot or back foot drive by analyzing:
-    1. Elbow positions to confirm it's a drive (not defense)
+    1. Elbow positions to confirm it's a drive (not defence)
     2. Ankle movement patterns to determine footwork
 
     Args:
@@ -40,7 +40,7 @@ def classify_drive_type(highlight_clip_path, output_folder):
     # Get video properties
     cap = cv2.VideoCapture(highlight_clip_path)
     if not cap.isOpened():
-        messagebox.showerror("Error", f"Could not open video file: {highlight_clip_path}")
+        print("Error", f"Could not open video file: {highlight_clip_path}")
         return "Classification failed: Could not open video"
 
     fps = cap.get(cv2.CAP_PROP_FPS)
@@ -105,13 +105,13 @@ def classify_drive_type(highlight_clip_path, output_folder):
     # Convert to DataFrame
     df = pd.DataFrame(frames_data)
 
-    # Step 1: Confirm it's a drive (not defense)
+    # Step 1: Confirm it's a drive (not defence)
     drive_frames = df[df['is_drive_candidate']].shape[0]
     is_drive = drive_frames > 5  # At least 5 frames meet drive condition
 
     if not is_drive:
-        # Classify as defense and determine footwork
-        return classify_defense_type(df, mid_frame, output_folder)
+        # Classify as defence and determine footwork
+        return classify_defence_type(df, mid_frame, output_folder)
 
     # Step 2: Determine footwork for drive
     before_mid = df[df['frame'] <= mid_frame]['ankle_distance'].sum()
@@ -169,7 +169,7 @@ def classify_drive_type(highlight_clip_path, output_folder):
     plt.savefig(plot_path)
     plt.close()
 
-    messagebox.showinfo(
+    print(
         "Drive Classification Complete",
         f"Analysis complete!\n\n{report}\n\nResults saved to:\n{drive_folder}"
     )
@@ -177,9 +177,9 @@ def classify_drive_type(highlight_clip_path, output_folder):
     return result
 
 
-def classify_defense_type(df, mid_frame, output_folder):
+def classify_defence_type(df, mid_frame, output_folder):
     """
-    Classify defense into front foot or back foot defense based on ankle movement.
+    Classify defence into front foot or back foot defence based on ankle movement.
 
     Args:
         df (DataFrame): Frame data with ankle distances
@@ -187,7 +187,7 @@ def classify_defense_type(df, mid_frame, output_folder):
         output_folder (str): Output directory path
 
     Returns:
-        str: Defense classification result
+        str: Defence classification result
     """
     # Calculate ankle distance sums
     before_mid = df[df['frame'] <= mid_frame]['ankle_distance'].sum()
@@ -196,15 +196,15 @@ def classify_defense_type(df, mid_frame, output_folder):
 
     # Determine classification
     if diff > 0.1:  # Significant threshold
-        result = "Front Foot Defense"
+        result = "Front Foot Defence"
     elif diff < -0.1:
-        result = "Back Foot Defense"
+        result = "Back Foot Defence"
     else:
-        result = "Defense (Footwork unclear - ankle movement patterns inconclusive)"
+        result = "Defence (Footwork unclear - ankle movement patterns inconclusive)"
 
     # Save analysis data
-    defense_folder = os.path.join(output_folder, "defense_analysis")
-    os.makedirs(defense_folder, exist_ok=True)
+    defence_folder = os.path.join(output_folder, "defence_analysis")
+    os.makedirs(defence_folder, exist_ok=True)
 
     analysis_data = {
         'before_mid_sum': before_mid,
@@ -215,7 +215,7 @@ def classify_defense_type(df, mid_frame, output_folder):
 
     # Create report
     report = (
-        f"Defense Classification Analysis:\n"
+        f"Defence Classification Analysis:\n"
         f"===============================\n"
         f"Ankle distance sum (first half): {before_mid:.4f}\n"
         f"Ankle distance sum (second half): {after_mid:.4f}\n"
@@ -224,13 +224,13 @@ def classify_defense_type(df, mid_frame, output_folder):
     )
 
     # Save report
-    report_path = os.path.join(defense_folder, "defense_classification_report.txt")
+    report_path = os.path.join(defence_folder, "defence_classification_report.txt")
     with open(report_path, 'w') as f:
         f.write(report)
 
-    messagebox.showinfo(
-        "Defense Classification",
-        f"Shot was classified as defense.\n\n{report}"
+    print(
+        "Defence Classification",
+        f"Shot was classified as defence.\n\n{report}"
     )
 
     return result
@@ -251,5 +251,5 @@ def process_drive_classification(highlight_clip_path, output_folder):
         return classify_drive_type(highlight_clip_path, output_folder)
     except Exception as e:
         error_msg = f"Error during drive classification: {str(e)}"
-        messagebox.showerror("Classification Error", error_msg)
+        print("Classification Error", error_msg)
         return error_msg
