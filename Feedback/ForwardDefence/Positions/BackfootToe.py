@@ -64,7 +64,7 @@ def get_mediapipe_landmarks(frame_path: str, pose) -> Dict[str, Any]:
         return None
 
 
-def analyze_backfoot_position(frame_path: str, pose) -> Tuple[Dict[str, Any], Dict[str, Any], bool]:
+def analyze_backfoot_toe(frame_path: str, pose) -> Tuple[Dict[str, Any], Dict[str, Any], bool]:
     """
     Analyze backfoot position for a single frame
     Returns:
@@ -82,6 +82,15 @@ def analyze_backfoot_position(frame_path: str, pose) -> Tuple[Dict[str, Any], Di
     is_left_backfoot = left_foot_heel_x < right_foot_heel_x
 
     backfoot = frame_data['left_foot'] if is_left_backfoot else frame_data['right_foot']
+
+    # Validate foot position landmarks
+    heel_x, heel_y = backfoot['heel']
+    ankle_x, ankle_y = backfoot['ankle']
+    knee_x, knee_y = backfoot['knee']
+
+    # Check if heel and ankle are to the left of knee (x coordinate) and below knee (y coordinate)
+    if not (heel_x < knee_x and ankle_x < knee_x and heel_y > knee_y and ankle_y > knee_y):
+        return None, None, None
 
     # Calculate heel and ankle positions
     heel_y = backfoot['heel'][1]
@@ -146,32 +155,38 @@ def process_backfoot_position(highlights_folder: str, frame_files: List[str], po
     Returns feedback dictionary with analysis results
     """
     try:
-        backfoot_data = []
+        valid_backfoot_data = []
 
         for frame_file in frame_files:
             frame_path = os.path.join(highlights_folder, frame_file)
-            backfoot, frame_data, heel_lifted = analyze_backfoot_position(frame_path, pose)
+            backfoot, frame_data, heel_lifted = analyze_backfoot_toe(frame_path, pose)
 
             if backfoot and frame_data:
-                backfoot_data.append({
+                valid_backfoot_data.append({
                     'frame_file': frame_file,
                     'heel_lifted': heel_lifted,
                     'backfoot': backfoot,
                     'frame_data': frame_data
                 })
 
-        if not backfoot_data:
-            return None
+        # If no valid frames found
+        if not valid_backfoot_data:
+            return {
+                "feedback_no": 1,
+                "title": "Backfoot Position Analysis",
+                "image_filename": "Couldn't Process",
+                "feedback_text": "Player heel position didn't recognize correctly. Please ensure proper posture for accurate analysis."
+            }
 
         # Select frame where heel is most lifted (or least lifted if no lift detected)
-        if any(item['heel_lifted'] for item in backfoot_data):
+        if any(item['heel_lifted'] for item in valid_backfoot_data):
             selected_frame = max(
-                [item for item in backfoot_data if item['heel_lifted']],
+                [item for item in valid_backfoot_data if item['heel_lifted']],
                 key=lambda x: x['backfoot']['ankle'][1] - x['backfoot']['heel'][1]
             )
         else:
             selected_frame = min(
-                backfoot_data,
+                valid_backfoot_data,
                 key=lambda x: x['backfoot']['ankle'][1] - x['backfoot']['heel'][1]
             )
 

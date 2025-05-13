@@ -3,7 +3,10 @@ from typing import List, Dict, Any
 from fastapi import FastAPI, HTTPException
 from fastapi.staticfiles import StaticFiles
 import mediapipe as mp
-from Feedback.ForwardDefence.Positions.BackfootAnalysis import process_backfoot_position
+from Feedback.ForwardDefence.Positions.BackfootToe import process_backfoot_position
+from Feedback.ForwardDefence.Positions.BackfootKnee import process_backfoot_knee_position
+from Feedback.ForwardDefence.Positions.FrontfootKnee import process_frontfoot_knee_position
+from Feedback.ForwardDefence.Positions.Hand import process_hand_positions
 
 app = FastAPI()
 
@@ -39,24 +42,60 @@ def processfeedback(highlights_folder: str, shot_type: str = None) -> List[Dict[
             model_complexity=1,
             min_detection_confidence=0.5
     ) as pose:
-        # Process backfoot position feedback
-        backfoot_feedback = process_backfoot_position(
+        # Process backfoot toe position feedback
+        backfoot_toe_feedback = process_backfoot_position(
             highlights_folder,
             frame_files,
             pose,
             FEEDBACK_IMAGES_DIR
         )
 
-        if backfoot_feedback:
+        if backfoot_toe_feedback:
             # Convert image filename to web URL
-            backfoot_feedback["image_url"] = f"/feedback-images/{backfoot_feedback.pop('image_filename')}"
-            feedback_data.append(backfoot_feedback)
+            backfoot_toe_feedback["image_url"] = f"/feedback-images/{backfoot_toe_feedback.pop('image_filename')}"
+            feedback_data.append(backfoot_toe_feedback)
 
-        # Here you can add more body position analyses as needed
-        # For example:
-        # head_position_feedback = process_head_position(...)
-        # if head_position_feedback:
-        #     feedback_data.append(head_position_feedback)
+        # Process backfoot knee position feedback
+        backfoot_knee_feedback = process_backfoot_knee_position(
+            highlights_folder,
+            frame_files,
+            pose,
+            FEEDBACK_IMAGES_DIR
+        )
+
+        if backfoot_knee_feedback:
+            # Convert image filename to web URL
+            backfoot_knee_feedback["image_url"] = f"/feedback-images/{backfoot_knee_feedback.pop('image_filename')}"
+            feedback_data.append(backfoot_knee_feedback)
+
+        # Process frontfoot knee position feedback
+        frontfoot_knee_feedback = process_frontfoot_knee_position(
+            highlights_folder,
+            frame_files,
+            pose,
+            FEEDBACK_IMAGES_DIR
+        )
+
+        if frontfoot_knee_feedback:
+            # Convert image filename to web URL
+            frontfoot_knee_feedback["image_url"] = f"/feedback-images/{frontfoot_knee_feedback.pop('image_filename')}"
+            feedback_data.append(frontfoot_knee_feedback)
+
+        # Process hand position feedback
+        hand_position_feedback = process_hand_positions(
+            highlights_folder,
+            frame_files,
+            pose,
+            FEEDBACK_IMAGES_DIR
+        )
+
+        if hand_position_feedback:
+            # Convert image filename to web URL
+            hand_position_feedback["image_url"] = f"/feedback-images/{hand_position_feedback.pop('image_filename')}"
+            feedback_data.append(hand_position_feedback)
+
+    # Sort feedback items by feedback_no to maintain consistent order
+    feedback_data.sort(key=lambda x: x['feedback_no'])
 
     return feedback_data
 
