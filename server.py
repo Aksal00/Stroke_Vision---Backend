@@ -90,6 +90,7 @@ def get_analysis_result(output_folder: str) -> Dict[str, Any]:
     # Initialize default result
     result = {
         'strokeName': 'Unknown',
+        'dominantHand': 'Unknown',
         'feedback': []
     }
 
@@ -105,17 +106,18 @@ def get_analysis_result(output_folder: str) -> Dict[str, Any]:
 
         # Extract stroke name
         stroke_name = 'Unknown'
-        for line in content.split('\n'):
+        dominant_hand = 'Unknown'
+
+        # Parse the file content
+        lines = content.split('\n')
+        for i, line in enumerate(lines):
             if "=== FINAL STROKE NAME ===" in line:
-                # Get the next line which contains the actual stroke name
-                idx = content.split('\n').index(line)
-                stroke_name = content.split('\n')[idx + 1].strip()
-                break
-            elif "[FINAL RESULT] Final stroke name:" in line:
-                stroke_name = line.split(":")[1].strip()
-                break
+                stroke_name = lines[i + 1].strip()
+            elif "=== DOMINANT HAND ===" in line:
+                dominant_hand = lines[i + 1].strip()
 
         result['strokeName'] = stroke_name
+        result['dominantHand'] = dominant_hand
 
         # Improved feedback data extraction
         feedback_markers = [
@@ -219,6 +221,10 @@ def analyze_video():
 
         logging.info(f"Video file saved successfully: {video_path}, size: {file_size} bytes")
 
+        # Get dominant hand from form data if available
+        dominant_hand = request.form.get('dominantHand', 'right')  # Default to right-handed
+        logging.info(f"Using dominant hand: {dominant_hand}")
+
         # Run analysis
         output_path = os.path.join(output_folder, f"analyzed_{filename}")
 
@@ -232,8 +238,13 @@ def analyze_video():
         logging.info(f"  - MODEL_PATH: {MODEL_PATH}")
         logging.info(f"  - video_path: {video_path}")
         logging.info(f"  - output_path: {output_path}")
+        logging.info(f"  - dominant_hand: {dominant_hand}")
 
-        analysis_result = analyze_cricket_landmarks(MODEL_PATH, video_path, output_path)
+        analysis_result = analyze_cricket_landmarks(
+            MODEL_PATH,
+            video_path,
+            output_path,
+        )
 
         logging.info(f"analyze_cricket_landmarks returned: {analysis_result}")
 

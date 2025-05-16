@@ -176,18 +176,18 @@ def process_frontfoot_knee_position(
         angle = calculate_knee_bend_angle(frontfoot)
 
         # Determine if position is ideal (good bend angle range)
-        is_ideal = 60 <= angle <= 120  # Adjust these values as needed
+        is_ideal = 40 <= angle <= 120  # Adjust these values as needed
 
         # Generate feedback text
         feedback_text = "Your front knee should be bent to lower your body and get your head over the ball. "
         feedback_text += "This helps with control and makes it easier to smother any bounce or movement off the pitch. "
 
         if is_ideal:
-            feedback_text += "Your front knee bend is ideal (%.1f°) - excellent technique!" % angle
-        elif angle < 120:
-            feedback_text += "Your knee is bent too much (%.1f°). While some bend is good, too much can affect your balance." % angle
+            feedback_text += "Your front knee bend is ideal - excellent technique!"
+        elif angle > 120:
+            feedback_text += "Your knee is bent too much. While some bend is good, too much can affect your balance."
         else:
-            feedback_text += "Your knee is too straight (%.1f°). Try bending it more for better control." % angle
+            feedback_text += "Your knee is too straight. Try bending it more for better control."
 
         # Create feedback image
         image_filename = create_frontfoot_knee_feedback_image(

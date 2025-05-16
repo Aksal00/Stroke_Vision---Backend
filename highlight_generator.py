@@ -184,10 +184,15 @@ def export_highlight_clips(
                 f.write(f"Selected peak at {highest_peak['time']:.2f}s\n")
                 f.write(f"Dominant hand: {dominant_hand}\n")
 
-        # Run shot classification
+        # Run shot classification with dominant hand parameter
         try:
             import shot_classifier
-            shot_classifier.classify_highlight_frames(highlights_folder, model_path, output_folder)
+            shot_classifier.classify_highlight_frames(
+                highlights_folder,
+                model_path,
+                output_folder,
+                dominant_hand=dominant_hand  # Pass dominant hand to classifier
+            )
         except Exception as e:
             logger.error(f"Shot classification failed: {e}")
             return False

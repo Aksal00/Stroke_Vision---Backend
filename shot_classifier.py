@@ -203,18 +203,24 @@ def find_highlight_clip(highlights_folder: str, output_folder: str) -> Optional[
         return None
 
 
-def apply_further_classification(clip_path: str, final_prediction: str, output_folder: str) -> str:
+def apply_further_classification(
+        clip_path: str,
+        final_prediction: str,
+        output_folder: str,
+) -> str:
     """
     Apply further classification based on the initial prediction
     Args:
         clip_path: Path to the highlight video clip
         final_prediction: The initial final prediction
         output_folder: Root output folder
+        dominant_hand: 'left' or 'right' indicating batsman's dominant hand
     Returns:
         The further classification result (just the stroke name)
     """
     print(f"[INFO] Starting further classification process")
     print(f"[INFO] Initial prediction: {final_prediction}")
+
 
     if not clip_path:
         # Extract base stroke name with the same improved logic
@@ -284,7 +290,8 @@ def apply_further_classification(clip_path: str, final_prediction: str, output_f
 def classify_highlight_frames(
         highlights_folder: str,
         model_path: str,
-        output_folder: str
+        output_folder: str,
+        dominant_hand: str
 ) -> Dict[str, Any]:
     """
     Classify frames from highlight clips and generate results
@@ -292,12 +299,14 @@ def classify_highlight_frames(
         highlights_folder: Path to folder containing highlight frames
         model_path: Path to classification model
         output_folder: Root output folder
+        dominant_hand: 'left' or 'right' indicating batsman's dominant hand
     Returns:
         Dictionary containing classification results
     """
     print(f"\n[INFO] ===== STARTING SHOT CLASSIFICATION PROCESS =====")
     print(f"[INFO] Highlights folder: {highlights_folder}")
     print(f"[INFO] Model path: {model_path}")
+    print(f"[INFO] Dominant hand: {dominant_hand}")
 
     # Define class names
     class_names = ['drive', 'legglance-flick', 'pullshot', 'sweep', 'frontfootdefence']  # Added frontfootdefence
@@ -356,7 +365,11 @@ def classify_highlight_frames(
 
     # Apply further classification to get the final stroke name
     print(f"\n[INFO] Starting further classification to determine final stroke name")
-    final_stroke_name = apply_further_classification(clip_path, initial_final_prediction, output_folder)
+    final_stroke_name = apply_further_classification(
+        clip_path,
+        initial_final_prediction,
+        output_folder
+    )
     print(f"\n[FINAL RESULT] Final stroke name: {final_stroke_name}")
 
     # Process feedback if the stroke is Front Foot Defence
@@ -388,6 +401,9 @@ def classify_highlight_frames(
 
             f.write("\n=== FINAL STROKE NAME ===\n")
             f.write(f"{final_stroke_name}\n")
+
+            f.write("\n=== DOMINANT HAND ===\n")
+            f.write(f"{dominant_hand}\n")
 
             if feedback_data:
                 # Convert numpy types to native Python types
@@ -426,6 +442,7 @@ def classify_highlight_frames(
         'frame_predictions': results,
         'initial_prediction': initial_final_prediction,
         'final_stroke_name': final_stroke_name,
+        'dominant_hand': dominant_hand,
         'feedback_data': feedback_data,
         'report_path': report_path,
         'highlight_clip_path': clip_path
