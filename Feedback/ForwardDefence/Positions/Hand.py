@@ -4,7 +4,7 @@ import numpy as np
 import mediapipe as mp
 from typing import Dict, Any, Tuple, List
 import uuid
-
+from ...image_utils import crop_and_save_image
 
 def get_mediapipe_hand_landmarks(frame_path: str, pose) -> Dict[str, Any]:
     """
@@ -45,16 +45,17 @@ def get_mediapipe_hand_landmarks(frame_path: str, pose) -> Dict[str, Any]:
         return None
 
 
-def analyze_hand_positions(frame_path: str, pose) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+def analyze_hand_positions(frame_path: str, pose) -> Tuple[Dict[str, Any], Dict[str, Any], bool]:
     """
     Analyze hand positions for a single frame
     Returns:
         - hand_data (with top/bottom hand info)
         - frame_data (raw landmarks)
+        - is_left_top_hand (True if left hand is top hand)
     """
     frame_data = get_mediapipe_hand_landmarks(frame_path, pose)
     if not frame_data:
-        return None, None
+        return None, None, None
 
     # Determine which hand is top hand (higher elbow)
     left_elbow_y = frame_data['left_elbow'][1]
@@ -73,22 +74,31 @@ def analyze_hand_positions(frame_path: str, pose) -> Tuple[Dict[str, Any], Dict[
         }
     }
 
-    return hand_data, frame_data
+    return hand_data, frame_data, is_left_top_hand
 
 
-def create_hand_position_feedback_image(highlights_folder: str, frame_file: str,
-                                        bottom_hand: Dict[str, Any], feedback_images_dir: str) -> str:
+def create_hand_position_feedback_image(
+        highlights_folder: str,
+        frame_file: str,
+        bottom_hand: Dict[str, Any],
+        feedback_images_dir: str,
+        is_left_handed: bool = False
+) -> str:
     """
-    Create feedback image for hand position analysis
+    Create feedback image for hand position analysis and return its filename
+    Args:
+        highlights_folder: Path to folder containing the frame
+        frame_file: Filename of the frame
+        bottom_hand: Dictionary containing bottom hand landmarks
+        feedback_images_dir: Directory to save feedback images
+        is_left_handed: Whether player is left-handed (for mirroring)
+    Returns:
+        Filename of the saved feedback image
     """
     try:
         frame_path = os.path.join(highlights_folder, frame_file)
-        img = cv2.imread(frame_path)
-        if img is None:
-            return ""
 
-        h, w = img.shape[:2]
-
+        # Get coordinates in pixels
         wrist_x, wrist_y = bottom_hand['wrist']
         elbow_x, elbow_y = bottom_hand['elbow']
 
@@ -96,44 +106,30 @@ def create_hand_position_feedback_image(highlights_folder: str, frame_file: str,
         wrist_elbow_dist = np.sqrt((wrist_x - elbow_x) ** 2 + (wrist_y - elbow_y) ** 2)
         crop_size = int(2 * wrist_elbow_dist)
 
-        # Ensure minimum crop size
+        # Ensure crop_size is at least 150px to avoid too small crops
         crop_size = max(crop_size, 150)
 
-        # Calculate crop coordinates centered on wrist
-        x1 = max(0, int(wrist_x - crop_size / 2))
-        y1 = max(0, int(wrist_y - crop_size / 2))
-        x2 = min(w, int(wrist_x + crop_size / 2))
-        y2 = min(h, int(wrist_y + crop_size / 2))
-
-        # Adjust if near edges
-        if x2 - x1 < crop_size:
-            if x1 == 0:
-                x2 = min(w, x1 + crop_size)
-            else:
-                x1 = max(0, x2 - crop_size)
-
-        if y2 - y1 < crop_size:
-            if y1 == 0:
-                y2 = min(h, y1 + crop_size)
-            else:
-                y1 = max(0, y2 - crop_size)
-
-        cropped_img = img[y1:y2, x1:x2]
-
-        unique_id = uuid.uuid4().hex
-        feedback_filename = f"hand_position_{unique_id}.jpg"
-        feedback_path = os.path.join(feedback_images_dir, feedback_filename)
-        cv2.imwrite(feedback_path, cropped_img)
-
-        return feedback_filename
+        # Use the utility function to crop and save
+        return crop_and_save_image(
+            original_image_path=frame_path,
+            center_coords=(int(wrist_x), int(wrist_y)),
+            crop_size=crop_size,
+            output_dir=feedback_images_dir,
+            mirror_if_left_handed=is_left_handed
+        )
 
     except Exception as e:
         print(f"[ERROR] Failed to create hand position feedback image: {e}")
         return ""
 
 
-def process_hand_positions(highlights_folder: str, frame_files: List[str], pose, feedback_images_dir: str) -> Dict[
-    str, Any]:
+def process_hand_positions(
+        highlights_folder: str,
+        frame_files: List[str],
+        pose,
+        feedback_images_dir: str,
+        is_left_handed: bool = False
+) -> Dict[str, Any]:
     """
     Main function to process hand position analysis
     Returns feedback dictionary with analysis results
@@ -143,21 +139,38 @@ def process_hand_positions(highlights_folder: str, frame_files: List[str], pose,
 
         for frame_file in frame_files:
             frame_path = os.path.join(highlights_folder, frame_file)
-            hand_data, frame_data = analyze_hand_positions(frame_path, pose)
+            hand_data, frame_data, is_left_top_hand = analyze_hand_positions(frame_path, pose)
 
             if hand_data and frame_data:
                 valid_hand_data.append({
                     'frame_file': frame_file,
                     'hand_data': hand_data,
-                    'frame_data': frame_data
+                    'frame_data': frame_data,
+                    'is_left_top_hand': is_left_top_hand
                 })
 
         if not valid_hand_data:
-            return None
+            return {
+                "feedback_no": 4,
+                "title": "Hand Position Analysis",
+                "image_filename": "",
+                "feedback_text": "Player hand positions didn't recognize correctly. Please ensure proper posture for accurate analysis.",
+                "ref-images": ["HandGrip.png", "BatAngle.png"],
+                "is_ideal": False
+            }
 
         # Use the first valid frame (or could implement selection logic)
         selected_frame = valid_hand_data[0]
         hand_data = selected_frame['hand_data']
+
+        # Check hand positions
+        top_wrist_y = hand_data['top_hand']['wrist'][1]
+        bottom_wrist_y = hand_data['bottom_hand']['wrist'][1]
+        top_wrist_x = hand_data['top_hand']['wrist'][0]
+        bottom_wrist_x = hand_data['bottom_hand']['wrist'][0]
+
+        # Determine if position is ideal
+        is_ideal = (top_wrist_y < bottom_wrist_y) and (top_wrist_x > bottom_wrist_x)
 
         # Generate base feedback
         feedback_text = (
@@ -167,18 +180,11 @@ def process_hand_positions(highlights_folder: str, frame_files: List[str], pose,
             "Too much pressure with the bottom hand can result in hard hands and the ball flying off the bat, "
             "increasing the risk of being caught.")
 
-        # Check hand positions
-        top_wrist_y = hand_data['top_hand']['wrist'][1]
-        bottom_wrist_y = hand_data['bottom_hand']['wrist'][1]
-
+        # Add specific feedback
         if top_wrist_y < bottom_wrist_y:
             feedback_text += " It seems like your hands are in correct positions on the bat."
         else:
             feedback_text += " It seems like something is wrong with your hand gripping positions. Please check your hand grip."
-
-        # Check bat angle (wrist x positions)
-        top_wrist_x = hand_data['top_hand']['wrist'][0]
-        bottom_wrist_x = hand_data['bottom_hand']['wrist'][0]
 
         if top_wrist_x > bottom_wrist_x:
             feedback_text += " You are correctly angling down the bat which will help avoid getting caught."
@@ -187,17 +193,20 @@ def process_hand_positions(highlights_folder: str, frame_files: List[str], pose,
 
         # Create feedback image
         image_filename = create_hand_position_feedback_image(
-            highlights_folder,
-            selected_frame['frame_file'],
-            hand_data['bottom_hand'],
-            feedback_images_dir
+            highlights_folder=highlights_folder,
+            frame_file=selected_frame['frame_file'],
+            bottom_hand=hand_data['bottom_hand'],
+            feedback_images_dir=feedback_images_dir,
+            is_left_handed=is_left_handed
         )
 
         return {
-            "feedback_no": 4,  # Assuming foot analyses are 1 and 2
+            "feedback_no": 4,
             "title": "Hand Position Analysis",
             "image_filename": image_filename,
-            "feedback_text": feedback_text
+            "feedback_text": feedback_text,
+            "ref-images": ["HandGrip.png", "BatAngle.png"],
+            "is_ideal": is_ideal
         }
 
     except Exception as e:

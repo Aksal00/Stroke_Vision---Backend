@@ -1,4 +1,4 @@
-from flask import Flask, request, jsonify, send_from_directory
+from flask import Flask, request, jsonify, send_from_directory, json
 from flask_cors import CORS
 import os
 import tempfile
@@ -10,233 +10,290 @@ from werkzeug.utils import secure_filename
 import cv2
 from typing import Dict, Any, Optional
 
+# Set up logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+
 # Import analysis modules
-from pose_analyzer import analyze_cricket_landmarks
-import shot_classifier
+try:
+    from pose_analyzer import analyze_cricket_landmarks
+    import shot_classifier
+
+    ANALYSIS_MODULES_LOADED = True
+except ImportError as e:
+    logging.error(f"Error importing analysis modules: {str(e)}")
+    ANALYSIS_MODULES_LOADED = False
 
 app = Flask(__name__)
-CORS(app)  # Enable CORS for all routes
+CORS(app, resources={r"/*": {"origins": "*"}})
 
-# Configure static file serving for feedback images
+# Configure static file serving
 FEEDBACK_IMAGES_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "feedback-images")
+REF_IMAGES_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "ref-images")
 os.makedirs(FEEDBACK_IMAGES_DIR, exist_ok=True)
+os.makedirs(REF_IMAGES_DIR, exist_ok=True)
+
 
 @app.route('/feedback-images/<filename>')
 def serve_feedback_image(filename):
-    """Serve feedback images from the feedback-images directory"""
     return send_from_directory(FEEDBACK_IMAGES_DIR, filename)
 
-# Configure logging
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+
+@app.route('/ref-images/<filename>')
+def serve_ref_image(filename):
+    return send_from_directory(REF_IMAGES_DIR, filename)
+
 
 # Configuration
 UPLOAD_FOLDER = os.path.join(tempfile.gettempdir(), 'cricket_analyzer')
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 MODEL_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "Model", "05", "image_classifier.h5")
-MAX_VIDEO_SIZE = 100 * 1024 * 1024  # 100MB
 ALLOWED_EXTENSIONS = {'.mp4', '.mov', '.avi'}
 
-# Flag to track if initialization has been done
-_is_initialized = False
+
+@app.route('/', methods=['GET'])
+def index():
+    """Root endpoint to check server status"""
+    return jsonify({
+        "status": "online",
+        "server": "Cricket Stroke Analyzer API",
+        "version": "1.0.0"
+    })
 
 
-def initialize_app():
-    """Initialize resources when the first request comes in"""
-    global _is_initialized
-    if _is_initialized:
-        return
+def cleanup_folder(folder_path):
+    """
+    Recursively delete a folder and all its contents.
 
-    if not os.path.exists(MODEL_PATH):
-        logger.warning(f"Model file not found at {MODEL_PATH}. Shot classification may not work properly.")
-
-    _is_initialized = True
-
-
-@app.before_request
-def before_request():
-    """Run before each request to ensure initialization"""
-    initialize_app()
-
-
-def allowed_file(filename: str) -> bool:
-    """Check if the file has an allowed extension"""
-    return os.path.splitext(filename)[1].lower() in ALLOWED_EXTENSIONS
-
-
-def cleanup_folder(folder: str) -> None:
-    """Clean up temporary files"""
+    Args:
+        folder_path: Path to the folder to be deleted
+    """
     try:
-        if os.path.exists(folder):
-            shutil.rmtree(folder)
-            logger.info(f"Cleaned up folder: {folder}")
+        if os.path.exists(folder_path):
+            shutil.rmtree(folder_path)
+            logging.info(f"Cleaned up temporary folder: {folder_path}")
     except Exception as e:
-        logger.error(f"Error cleaning up folder {folder}: {e}")
+        logging.error(f"Error cleaning up folder {folder_path}: {str(e)}")
+        logging.error(traceback.format_exc())
 
 
-def validate_video(video_path: str) -> bool:
-    """Validate the video file is readable and has reasonable duration"""
-    try:
-        cap = cv2.VideoCapture(video_path)
-        if not cap.isOpened():
-            return False
-
-        frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-        fps = cap.get(cv2.CAP_PROP_FPS)
-        cap.release()
-
-        if fps <= 0 or frame_count <= 0:
-            return False
-
-        duration = frame_count / fps
-        if duration > 120:  # 2 minutes max
-            return False
-
-        return True
-    except Exception:
-        return False
-
-
-# In your existing server.py, modify the get_analysis_result function as follows:
 def get_analysis_result(output_folder: str) -> Dict[str, Any]:
-    """Extract analysis results from output folder"""
+    """Extract analysis results from output folder with improved feedback handling"""
     highlights_folder = os.path.join(output_folder, "movement_highlights")
-    shot_class_file = os.path.join(highlights_folder, "shot_classifications", "classification_summary.txt")
+    shot_class_folder = os.path.join(highlights_folder, "shot_classifications")
+    shot_class_file = os.path.join(shot_class_folder, "classification_summary.txt")
 
-    logger.info(f"Looking for classification results in: {shot_class_file}")
+    logging.info(f"Looking for results in: {output_folder}")
 
-    if not os.path.exists(shot_class_file):
-        logger.error(f"Classification file not found at: {shot_class_file}")
-        return {'strokeName': 'Unknown', 'error': 'Classification results not found'}
-
-    with open(shot_class_file, 'r') as f:
-        content = f.read()
-        logger.info(f"Read classification file with {len(content)} characters")
-
-    # Default result
+    # Initialize default result
     result = {
         'strokeName': 'Unknown',
         'feedback': []
     }
 
-    # Extract stroke name (your existing code remains the same)
-    sections = content.split('\n=== ')
-    for section in sections:
-        if "FINAL STROKE NAME" in section:
-            logger.info(f"Found FINAL STROKE NAME section: {section}")
-            lines = section.split('\n')
-            if len(lines) > 1:
-                final_stroke_name = lines[1].strip()
-                logger.info(f"Extracted final stroke name: {final_stroke_name}")
-                if final_stroke_name:
-                    result['strokeName'] = final_stroke_name
-                    break
+    # Check if classification file exists
+    if not os.path.exists(shot_class_file):
+        logging.error(f"Classification file not found: {shot_class_file}")
+        return result
 
-    # If no FINAL STROKE NAME section, look for "FINAL RESULT"
-    if result['strokeName'] == 'Unknown':
+    try:
+        with open(shot_class_file, 'r') as f:
+            content = f.read()
+            logging.info(f"Read {len(content)} bytes from classification file")
+
+        # Extract stroke name
+        stroke_name = 'Unknown'
         for line in content.split('\n'):
-            if "[FINAL RESULT] Final stroke name:" in line:
-                logger.info(f"Found [FINAL RESULT] line: {line}")
-                final_stroke_name = line.split("[FINAL RESULT] Final stroke name:")[1].strip()
-                logger.info(f"Extracted final stroke name from FINAL RESULT: {final_stroke_name}")
-                if final_stroke_name:
-                    result['strokeName'] = final_stroke_name
-                    break
+            if "=== FINAL STROKE NAME ===" in line:
+                # Get the next line which contains the actual stroke name
+                idx = content.split('\n').index(line)
+                stroke_name = content.split('\n')[idx + 1].strip()
+                break
+            elif "[FINAL RESULT] Final stroke name:" in line:
+                stroke_name = line.split(":")[1].strip()
+                break
 
-    # Enhanced feedback extraction
-    feedback_sections = []
-    if "=== FEEDBACK ===" in content:
-        feedback_content = content.split("=== FEEDBACK ===")[1]
-        # Split by double newlines to separate feedback items
-        feedback_items = [item.strip() for item in feedback_content.split('\n\n') if item.strip()]
+        result['strokeName'] = stroke_name
 
-        for item in feedback_items:
-            lines = [line.strip() for line in item.split('\n') if line.strip()]
-            if len(lines) >= 2:
-                # Extract title by removing "Title:" prefix
-                title_line = lines[0]
-                if title_line.startswith('Title:'):
-                    title = title_line.split('Title:')[1].strip()
-                else:
-                    title = title_line.replace(':', '').strip()
+        # Improved feedback data extraction
+        feedback_markers = [
+            "Feedback data:",
+            "=== FEEDBACK DATA ==="
+        ]
 
-                description = '\n'.join(lines[1:]).strip()
-                feedback_sections.append({
-                    'title': title,  # Now contains just the title without "Title" prefix
-                    'description': description
-                })
+        feedback_data = []
+        for marker in feedback_markers:
+            if marker in content:
+                try:
+                    json_start = content.find(marker) + len(marker)
+                    json_str = content[json_start:].strip()
 
-    result['feedback'] = feedback_sections
+                    # Clean up the JSON string
+                    json_str = json_str.split('\n===', 1)[0]  # Remove next section if present
+                    json_str = json_str.strip()
 
-    # Clean up stroke name by removing extra spaces
-    if result['strokeName'] != 'Unknown':
-        result['strokeName'] = ' '.join(result['strokeName'].split())
+                    if json_str:
+                        feedback_data = json.loads(json_str)
+                        logging.info(f"Successfully parsed feedback data with marker: {marker}")
+                        break
+                except json.JSONDecodeError as e:
+                    logging.error(f"JSON decode error with marker {marker}: {str(e)}")
+                    logging.error(f"Problematic JSON string: {json_str[:200]}...")
+                except Exception as e:
+                    logging.error(f"Error processing feedback with marker {marker}: {str(e)}")
 
-    logger.info(f"Returning analysis result: {result}")
+        # Convert feedback data to expected format
+        result['feedback'] = []
+        for item in feedback_data:
+            try:
+                feedback_item = {
+                    'title': item.get('title', ''),
+                    'description': item.get('feedback_text', item.get('description', '')),
+                    'is_ideal': item.get('is_ideal', False),
+                    'image_url': item.get('image_url', ''),
+                    'ref-images': item.get('ref-images', [])
+                }
+                result['feedback'].append(feedback_item)
+            except Exception as e:
+                logging.error(f"Error processing feedback item: {str(e)}")
+                continue
+
+        logging.info(f"Found {len(result['feedback'])} feedback items")
+
+    except Exception as e:
+        logging.error(f"Error processing analysis results: {str(e)}")
+        logging.error(traceback.format_exc())
+
     return result
-
-@app.route('/', methods=['GET'])
-def index():
-    """Health check endpoint"""
-    return jsonify({
-        'status': 'ok',
-        'message': 'Cricket Shot Analyzer API is running',
-        'model_available': os.path.exists(MODEL_PATH)
-    })
 
 
 @app.route('/analyze', methods=['POST'])
 def analyze_video():
-    """Endpoint to receive and analyze video uploads"""
+    if not ANALYSIS_MODULES_LOADED:
+        return jsonify({'error': 'Analysis modules not available'}), 500
+
     analysis_id = str(uuid.uuid4())
     output_folder = os.path.join(UPLOAD_FOLDER, analysis_id)
     os.makedirs(output_folder, exist_ok=True)
 
+    logging.info(f"Created analysis directory: {output_folder}")
+
     try:
-        # Check if video file was uploaded
+        logging.info(f"Received analyze request, content type: {request.content_type}")
+
+        # Debug request information
+        logging.info(f"Request form data keys: {list(request.form.keys()) if request.form else 'None'}")
+        logging.info(f"Request files keys: {list(request.files.keys()) if request.files else 'None'}")
+
         if 'video' not in request.files:
+            logging.error("No video file in request")
             return jsonify({'error': 'No video file provided'}), 400
 
         video_file = request.files['video']
         if video_file.filename == '':
+            logging.error("Empty filename received")
             return jsonify({'error': 'No selected file'}), 400
 
-        # Validate file
         filename = secure_filename(video_file.filename)
-        if not allowed_file(filename):
-            return jsonify({'error': 'Unsupported file format'}), 400
+        file_ext = os.path.splitext(filename)[1].lower()
 
-        # Save uploaded file
+        if file_ext not in ALLOWED_EXTENSIONS:
+            logging.error(f"Unsupported file extension: {file_ext}")
+            return jsonify({'error': f'Unsupported file format: {file_ext}. Allowed: {ALLOWED_EXTENSIONS}'}), 400
+
         video_path = os.path.join(output_folder, filename)
         video_file.save(video_path)
-        logger.info(f"Saved uploaded video to {video_path}")
+        logging.info(f"Saved video to {video_path}")
 
-        # Validate video
-        if not validate_video(video_path):
-            return jsonify({'error': 'Invalid video file'}), 400
+        # Check if file was actually saved and is readable
+        if not os.path.exists(video_path):
+            logging.error(f"File not saved: {video_path}")
+            return jsonify({'error': 'Failed to save video file'}), 500
+
+        file_size = os.path.getsize(video_path)
+        if file_size == 0:
+            logging.error(f"Saved file is empty: {video_path}")
+            return jsonify({'error': 'Uploaded file is empty'}), 400
+
+        logging.info(f"Video file saved successfully: {video_path}, size: {file_size} bytes")
 
         # Run analysis
         output_path = os.path.join(output_folder, f"analyzed_{filename}")
-        success = analyze_cricket_landmarks(MODEL_PATH, video_path, output_path)
 
-        if not success:
+        logging.info(f"Starting video analysis with model: {MODEL_PATH}")
+        if not os.path.exists(MODEL_PATH):
+            logging.error(f"Model file not found: {MODEL_PATH}")
+            return jsonify({'error': 'Model file not found'}), 500
+
+        # Log information before and after calling analyze_cricket_landmarks
+        logging.info(f"About to call analyze_cricket_landmarks with parameters:")
+        logging.info(f"  - MODEL_PATH: {MODEL_PATH}")
+        logging.info(f"  - video_path: {video_path}")
+        logging.info(f"  - output_path: {output_path}")
+
+        analysis_result = analyze_cricket_landmarks(MODEL_PATH, video_path, output_path)
+
+        logging.info(f"analyze_cricket_landmarks returned: {analysis_result}")
+
+        if not analysis_result:
+            logging.error("Video analysis failed")
             return jsonify({'error': 'Video analysis failed'}), 500
 
-        # Get and return results
+        # List contents of the output directory after analysis
+        logging.info(f"After analysis, contents of output folder {output_folder}: {os.listdir(output_folder)}")
+
+        # Check if the movement_highlights folder was created
+        movement_highlights_path = os.path.join(output_folder, "movement_highlights")
+        if os.path.exists(movement_highlights_path):
+            logging.info(f"Contents of movement_highlights folder: {os.listdir(movement_highlights_path)}")
+
+            # Check if shot_classifications folder exists
+            shot_class_path = os.path.join(movement_highlights_path, "shot_classifications")
+            if os.path.exists(shot_class_path):
+                logging.info(f"Contents of shot_classifications folder: {os.listdir(shot_class_path)}")
+        else:
+            logging.error(f"movement_highlights folder not created at: {movement_highlights_path}")
+
+        # Get the analysis results
+        logging.info("Calling get_analysis_result to extract results")
         result = get_analysis_result(output_folder)
-        logger.info(f"Returning stroke analysis result: {result}")
+
+        logging.info(f"Analysis completed, final result to send to frontend: {result}")
         return jsonify(result)
 
     except Exception as e:
-        logger.error(f"Error processing video: {str(e)}")
-        logger.error(traceback.format_exc())
-        return jsonify({'error': 'Internal server error'}), 500
+        logging.error(f"Error processing video: {str(e)}")
+        logging.error(traceback.format_exc())
+        return jsonify({'error': f'Internal server error: {str(e)}'}), 500
 
     finally:
-        # Clean up in production (keep files for debugging)
+        # In debug mode, keep the files for inspection
         if not app.debug:
             cleanup_folder(output_folder)
+        else:
+            logging.info(f"Debug mode enabled, keeping output folder: {output_folder}")
+
+
+@app.route('/status', methods=['GET'])
+def check_status():
+    """
+    Additional endpoint to check server status and configuration
+    """
+    try:
+        return jsonify({
+            "status": "online",
+            "model_loaded": os.path.exists(MODEL_PATH),
+            "analysis_modules": ANALYSIS_MODULES_LOADED,
+            "upload_folder": UPLOAD_FOLDER,
+            "allowed_extensions": list(ALLOWED_EXTENSIONS)
+        })
+    except Exception as e:
+        logging.error(f"Error in status check: {str(e)}")
+        return jsonify({"status": "error", "message": str(e)}), 500
 
 
 if __name__ == '__main__':
+    logging.info("Starting Flask server on 0.0.0.0:5000")
     app.run(host='0.0.0.0', port=5000, debug=True)

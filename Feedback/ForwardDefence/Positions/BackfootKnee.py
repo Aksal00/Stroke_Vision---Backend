@@ -4,6 +4,7 @@ import numpy as np
 import mediapipe as mp
 from typing import Dict, Any, Tuple, List
 import uuid
+from ...image_utils import crop_and_save_image
 
 
 def get_mediapipe_landmarks(frame_path: str, pose) -> Dict[str, Any]:
@@ -94,20 +95,26 @@ def analyze_backfoot_knee(frame_path: str, pose) -> Tuple[Dict[str, Any], Dict[s
     return backfoot, frame_data, is_left_backfoot
 
 
-def create_backfoot_knee_feedback_image(highlights_folder: str, frame_file: str,
-                                        backfoot: Dict[str, Any], feedback_images_dir: str) -> str:
+def create_backfoot_knee_feedback_image(
+        highlights_folder: str,
+        frame_file: str,
+        backfoot: Dict[str, Any],
+        feedback_images_dir: str,
+        is_left_handed: bool = False
+) -> str:
     """
     Create feedback image for backfoot knee analysis and return its filename
-    Ensures the cropped image is perfectly centered around the knee landmark
+    Args:
+        highlights_folder: Path to folder containing the frame
+        frame_file: Filename of the frame
+        backfoot: Dictionary containing backfoot landmarks
+        feedback_images_dir: Directory to save feedback images
+        is_left_handed: Whether player is left-handed (for mirroring)
+    Returns:
+        Filename of the saved feedback image
     """
     try:
         frame_path = os.path.join(highlights_folder, frame_file)
-        img = cv2.imread(frame_path)
-        if img is None:
-            return ""
-
-        # Get image dimensions
-        h, w = img.shape[:2]
 
         # Get coordinates in pixels
         ankle_x, ankle_y = backfoot['ankle']
@@ -120,50 +127,27 @@ def create_backfoot_knee_feedback_image(highlights_folder: str, frame_file: str,
         # Ensure crop_size is at least 100px to avoid too small crops
         crop_size = max(crop_size, 100)
 
-        # Calculate exact center coordinates
-        center_x = int(knee_x)
-        center_y = int(knee_y)
-
-        # Calculate crop boundaries ensuring we stay within image dimensions
-        half_size = crop_size // 2
-
-        # Adjust boundaries if they go beyond image dimensions
-        x1 = max(0, center_x - half_size)
-        y1 = max(0, center_y - half_size)
-        x2 = min(w, center_x + half_size)
-        y2 = min(h, center_y + half_size)
-
-        # If we're at the edge of the image, adjust the other side to maintain crop size
-        if x2 - x1 < crop_size:
-            if x1 == 0:  # At left edge
-                x2 = min(w, x1 + crop_size)
-            else:  # At right edge
-                x1 = max(0, x2 - crop_size)
-
-        if y2 - y1 < crop_size:
-            if y1 == 0:  # At top edge
-                y2 = min(h, y1 + crop_size)
-            else:  # At bottom edge
-                y1 = max(0, y2 - crop_size)
-
-        # Crop the original image
-        cropped_img = img[y1:y2, x1:x2]
-
-        # Generate unique filename and save
-        unique_id = uuid.uuid4().hex
-        feedback_filename = f"backfoot_knee_feedback_{unique_id}.jpg"
-        feedback_path = os.path.join(feedback_images_dir, feedback_filename)
-        cv2.imwrite(feedback_path, cropped_img)
-
-        return feedback_filename
+        # Use the utility function to crop and save
+        return crop_and_save_image(
+            original_image_path=frame_path,
+            center_coords=(int(knee_x), int(knee_y)),
+            crop_size=crop_size,
+            output_dir=feedback_images_dir,
+            mirror_if_left_handed=is_left_handed
+        )
 
     except Exception as e:
         print(f"[ERROR] Failed to create feedback image: {e}")
         return ""
 
 
-def process_backfoot_knee_position(highlights_folder: str, frame_files: List[str], pose, feedback_images_dir: str) -> \
-Dict[str, Any]:
+def process_backfoot_knee_position(
+        highlights_folder: str,
+        frame_files: List[str],
+        pose,
+        feedback_images_dir: str,
+        is_left_handed: bool = False
+) -> Dict[str, Any]:
     """
     Main function to process backfoot knee position analysis
     Returns feedback dictionary with analysis results
@@ -190,8 +174,10 @@ Dict[str, Any]:
             return {
                 "feedback_no": 2,
                 "title": "Backfoot Knee Position Analysis",
-                "image_filename": "Couldn't Process",
-                "feedback_text": "Player knee position didn't recognize correctly. Please ensure proper posture for accurate analysis."
+                "image_filename": "",
+                "feedback_text": "Player knee position didn't recognize correctly. Please ensure proper posture for accurate analysis.",
+                "ref-images": ["Backfoot.png", "Hand.png"],
+                "is_ideal": False
             }
 
         # Select frame where hip has highest x coordinate (most forward position)
@@ -210,27 +196,36 @@ Dict[str, Any]:
         # Generate base feedback
         feedback_text = "Your back knee should be slightly bent, not locked straight. This gives you balance and helps transfer your weight smoothly to the front foot."
 
+        # Determine if position is ideal
+        is_ideal = False
+
         # Add specific feedback based on knee position
         if hip_knee_diff < knee_ankle_diff / 3:
             feedback_text += " It seems like your knee has bent too much."
+            is_ideal = False
         elif hip_knee_diff >= knee_ankle_diff / 3 and hip_knee_diff < knee_ankle_diff:
             feedback_text += " It seems like your backfoot knee is technically okay. Keep it up!"
+            is_ideal = True
         else:
             feedback_text += " It seems like your backfoot knee is locked straight."
+            is_ideal = False
 
         # Create feedback image
         image_filename = create_backfoot_knee_feedback_image(
             highlights_folder,
             selected_frame['frame_file'],
             selected_frame['backfoot'],
-            feedback_images_dir
+            feedback_images_dir,
+            is_left_handed
         )
 
         return {
             "feedback_no": 2,
             "title": "Backfoot Knee Position Analysis",
             "image_filename": image_filename,
-            "feedback_text": feedback_text
+            "feedback_text": feedback_text,
+            "ref-images": ["Backfoot.png", "Hand.png"],
+            "is_ideal": is_ideal
         }
 
     except Exception as e:

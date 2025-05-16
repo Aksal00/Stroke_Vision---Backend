@@ -1,0 +1,77 @@
+import cv2
+import numpy as np
+import os
+import uuid
+from typing import Tuple
+
+def crop_and_save_image(
+    original_image_path: str,
+    center_coords: Tuple[int, int],
+    crop_size: int,
+    output_dir: str,
+    mirror_if_left_handed: bool = False
+) -> str:
+    """
+    Crop an image around center coordinates and save it
+    Args:
+        original_image_path: Path to the original image
+        center_coords: (x, y) coordinates of the center point
+        crop_size: Size of the square crop area
+        output_dir: Directory to save the cropped image
+        mirror_if_left_handed: Whether to mirror the image for left-handed players
+    Returns:
+        Filename of the saved cropped image
+    """
+    try:
+        # Read the image
+        img = cv2.imread(original_image_path)
+        if img is None:
+            return ""
+
+        # Get image dimensions
+        h, w = img.shape[:2]
+
+        # Calculate exact center coordinates
+        center_x, center_y = center_coords
+
+        # Calculate crop boundaries ensuring we stay within image dimensions
+        half_size = crop_size // 2
+
+        # Adjust boundaries if they go beyond image dimensions
+        x1 = max(0, center_x - half_size)
+        y1 = max(0, center_y - half_size)
+        x2 = min(w, center_x + half_size)
+        y2 = min(h, center_y + half_size)
+
+        # If we're at the edge of the image, adjust the other side to maintain crop size
+        if x2 - x1 < crop_size:
+            if x1 == 0:  # At left edge
+                x2 = min(w, x1 + crop_size)
+            else:  # At right edge
+                x1 = max(0, x2 - crop_size)
+
+        if y2 - y1 < crop_size:
+            if y1 == 0:  # At top edge
+                y2 = min(h, y1 + crop_size)
+            else:  # At bottom edge
+                y1 = max(0, y2 - crop_size)
+
+        # Crop the original image
+        cropped_img = img[y1:y2, x1:x2]
+
+        # Mirror if needed for left-handed players
+        if mirror_if_left_handed:
+            cropped_img = cv2.flip(cropped_img, 1)
+
+        # Generate unique filename and save
+        os.makedirs(output_dir, exist_ok=True)
+        unique_id = uuid.uuid4().hex
+        feedback_filename = f"cropped_feedback_{unique_id}.jpg"
+        feedback_path = os.path.join(output_dir, feedback_filename)
+        cv2.imwrite(feedback_path, cropped_img)
+
+        return feedback_filename
+
+    except Exception as e:
+        print(f"[ERROR] Failed to create feedback image: {e}")
+        return ""

@@ -4,6 +4,8 @@ import cv2
 import logging
 from typing import List, Tuple, Dict, Any, Optional
 import keras
+from flask import json
+
 from Feedback.ForwardDefence.ForwardDefence import processfeedback
 
 # Set up logging
@@ -371,29 +373,53 @@ def classify_highlight_frames(
     # Save results to file
     print(f"[INFO] Saving comprehensive results to file")
     report_path = os.path.join(results_folder, "classification_summary.txt")
-    with open(report_path, 'w') as f:
-        f.write("=== FRAME-BY-FRAME PREDICTIONS ===\n")
-        for path, (top_preds, weighted_pred) in results.items():
-            f.write(f"\n{os.path.basename(path)}:\n")
-            for i, (cls, conf) in enumerate(top_preds, 1):
-                f.write(f"{i}. {cls} ({conf:.2%})\n")
-            f.write(f"Weighted: {weighted_pred}\n")
 
-        f.write("\n=== INITIAL FINAL PREDICTION ===\n")
-        f.write(f"{initial_final_prediction}\n")
+    try:
+        with open(report_path, 'w') as f:
+            f.write("=== FRAME-BY-FRAME PREDICTIONS ===\n")
+            for path, (top_preds, weighted_pred) in results.items():
+                f.write(f"\n{os.path.basename(path)}:\n")
+                for i, (cls, conf) in enumerate(top_preds, 1):
+                    f.write(f"{i}. {cls} ({conf:.2%})\n")
+                f.write(f"Weighted: {weighted_pred}\n")
 
-        f.write("\n=== FINAL STROKE NAME ===\n")
-        f.write(f"{final_stroke_name}\n")
+            f.write("\n=== INITIAL FINAL PREDICTION ===\n")
+            f.write(f"{initial_final_prediction}\n")
 
-        if feedback_data:
-            f.write("\n=== FEEDBACK ===\n")
-            for item in feedback_data:
-                f.write(f"\nTitle: {item['title']}\n")
-                f.write(f"Image URL: {item['image_url']}\n")
-                f.write(f"Feedback: {item['feedback_text']}\n")
+            f.write("\n=== FINAL STROKE NAME ===\n")
+            f.write(f"{final_stroke_name}\n")
 
-    print(f"[INFO] Classification complete. Results saved to {report_path}")
-    print(f"[INFO] ===== SHOT CLASSIFICATION PROCESS COMPLETE =====\n")
+            if feedback_data:
+                # Convert numpy types to native Python types
+                def convert_numpy_types(obj):
+                    if isinstance(obj, np.bool_):
+                        return bool(obj)
+                    elif isinstance(obj, (np.int_, np.intc, np.intp, np.int8,
+                                          np.int16, np.int32, np.int64, np.uint8,
+                                          np.uint16, np.uint32, np.uint64)):
+                        return int(obj)
+                    elif isinstance(obj, (np.float_, np.float16, np.float32, np.float64)):
+                        return float(obj)
+                    elif isinstance(obj, np.ndarray):
+                        return obj.tolist()
+                    elif isinstance(obj, dict):
+                        return {k: convert_numpy_types(v) for k, v in obj.items()}
+                    elif isinstance(obj, (list, tuple)):
+                        return [convert_numpy_types(item) for item in obj]
+                    return obj
+
+                feedback_data = convert_numpy_types(feedback_data)
+                f.write("\n=== FEEDBACK DATA ===\n")
+                f.write("Feedback data: " + json.dumps(feedback_data, indent=2) + "\n")
+
+            # Ensure data is written to disk
+            f.flush()
+            os.fsync(f.fileno())
+
+        print(f"[SUCCESS] Report file written successfully to {report_path}")
+    except Exception as e:
+        print(f"[ERROR] Failed to write report file: {e}")
+        raise
 
     logger.info(f"Classification complete. Results saved to {results_folder}")
     return {

@@ -9,14 +9,14 @@ from typing import List, Dict, Any, Optional, Tuple
 # Configure logging
 logger = logging.getLogger(__name__)
 
-
 def export_highlight_clips(
         model_path: str,
         video_path: str,
         original_frames: List[np.ndarray],
         peaks_info: pd.DataFrame,
         fps: float,
-        output_folder: str
+        output_folder: str,
+        dominant_hand: str
 ) -> bool:
     """
     Export highlight video clips around movement peaks
@@ -28,6 +28,7 @@ def export_highlight_clips(
         peaks_info: DataFrame with peak movement info
         fps: Video frames per second
         output_folder: Root output folder
+        dominant_hand: 'left' or 'right' indicating batsman's dominant hand
 
     Returns:
         bool: True if successful, False otherwise
@@ -41,10 +42,15 @@ def export_highlight_clips(
             logger.warning("No significant movements detected")
             return False
 
-        # Get landmark indices
-        right_elbow_idx = mp.solutions.pose.PoseLandmark.RIGHT_ELBOW.value
-        right_shoulder_idx = mp.solutions.pose.PoseLandmark.RIGHT_SHOULDER.value
-        right_wrist_idx = mp.solutions.pose.PoseLandmark.RIGHT_WRIST.value
+        # Get landmark indices based on dominant hand
+        if dominant_hand == 'left':
+            elbow_idx = mp.solutions.pose.PoseLandmark.LEFT_ELBOW.value
+            shoulder_idx = mp.solutions.pose.PoseLandmark.LEFT_SHOULDER.value
+            wrist_idx = mp.solutions.pose.PoseLandmark.LEFT_WRIST.value
+        else:
+            elbow_idx = mp.solutions.pose.PoseLandmark.RIGHT_ELBOW.value
+            shoulder_idx = mp.solutions.pose.PoseLandmark.RIGHT_SHOULDER.value
+            wrist_idx = mp.solutions.pose.PoseLandmark.RIGHT_WRIST.value
 
         # Load full landmark data
         landmark_csv_path = os.path.join(output_folder, 'landmark_data.csv')
@@ -55,9 +61,9 @@ def export_highlight_clips(
         full_landmark_data = pd.read_csv(landmark_csv_path)
 
         # Find max wrist x position
-        max_wrist_x = full_landmark_data[f'landmark_{right_wrist_idx}_x'].max()
+        max_wrist_x = full_landmark_data[f'landmark_{wrist_idx}_x'].max()
         max_wrist_x_row = full_landmark_data[
-            full_landmark_data[f'landmark_{right_wrist_idx}_x'] == max_wrist_x
+            full_landmark_data[f'landmark_{wrist_idx}_x'] == max_wrist_x
             ].iloc[0]
         max_wrist_x_time = max_wrist_x_row['time']
 
@@ -70,8 +76,8 @@ def export_highlight_clips(
             frame_idx = int(peak['frame'])
             frame_data = full_landmark_data[full_landmark_data['frame'] == frame_idx].iloc[0]
 
-            elbow_x = frame_data[f'landmark_{right_elbow_idx}_x']
-            shoulder_x = frame_data[f'landmark_{right_shoulder_idx}_x']
+            elbow_x = frame_data[f'landmark_{elbow_idx}_x']
+            shoulder_x = frame_data[f'landmark_{shoulder_idx}_x']
             time = peak['time']
 
             condition1 = elbow_x < shoulder_x  # Elbow left of shoulder
@@ -81,8 +87,8 @@ def export_highlight_clips(
                 fallback_peaks.append((idx, peak['total_movement'], time))
             elif condition1:
                 exclusion_reasons[idx] = (
-                    f"Peak at {time:.2f}s excluded: Right elbow ({elbow_x:.2f}) "
-                    f"is left of right shoulder ({shoulder_x:.2f})"
+                    f"Peak at {time:.2f}s excluded: {dominant_hand.capitalize()} elbow ({elbow_x:.2f}) "
+                    f"is left of {dominant_hand} shoulder ({shoulder_x:.2f})"
                 )
             elif condition2:
                 exclusion_reasons[idx] = (
@@ -122,7 +128,7 @@ def export_highlight_clips(
         # Create clip
         height, width = original_frames[0].shape[:2]
         fourcc = cv2.VideoWriter_fourcc(*'mp4v')
-        clip_filename = f"highest_peak_at_{highest_peak['time']:.2f}sec.mp4"
+        clip_filename = f"highest_peak_at_{highest_peak['time']:.2f}sec_{dominant_hand}.mp4"
         clip_path = os.path.join(highlights_folder, clip_filename)
         clip_writer = cv2.VideoWriter(clip_path, fourcc, fps, (width, height))
 
@@ -151,6 +157,8 @@ def export_highlight_clips(
             cv2.putText(frame, time_text, (20, 40), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 255), 2)
             cv2.putText(frame, f"Peak at {highest_peak['time']:.2f}s", (20, 80), cv2.FONT_HERSHEY_SIMPLEX, 1,
                         (0, 255, 255), 2)
+            cv2.putText(frame, f"Dominant hand: {dominant_hand}", (20, 120), cv2.FONT_HERSHEY_SIMPLEX, 1,
+                        (0, 255, 255), 2)
 
             if frame_idx == peak_frame:
                 frame = cv2.rectangle(frame, (0, 0), (width - 1, height - 1), (0, 0, 255), 5)
@@ -160,7 +168,7 @@ def export_highlight_clips(
             # Save specific frames as images
             for t, target_frame in frames_to_capture.items():
                 if frame_idx == target_frame:
-                    img_filename = f"frame_at_{t:.2f}sec.jpg"
+                    img_filename = f"frame_at_{t:.2f}sec_{dominant_hand}.jpg"
                     img_path = os.path.join(highlights_folder, img_filename)
                     cv2.imwrite(img_path, frame)
 
@@ -174,6 +182,7 @@ def export_highlight_clips(
                 f.write("Peaks excluded from selection and reasons:\n")
                 f.write("\n".join(exclusion_reasons.values()) + "\n\n")
                 f.write(f"Selected peak at {highest_peak['time']:.2f}s\n")
+                f.write(f"Dominant hand: {dominant_hand}\n")
 
         # Run shot classification
         try:

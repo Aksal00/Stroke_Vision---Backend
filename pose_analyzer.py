@@ -4,6 +4,7 @@ import numpy as np
 import os
 import logging
 from typing import List, Dict, Any
+from dominant_hand import determine_dominant_hand
 
 # Import visualization modules
 from visualization import visualize_landmark_data
@@ -33,6 +34,20 @@ def analyze_cricket_landmarks(
     """
     logger.info(f"Starting video analysis: {video_path}")
 
+    # First determine dominant hand and get appropriate video path
+    dominant_hand, processed_video_path = determine_dominant_hand(video_path)
+    if not dominant_hand:
+        logger.error("Failed to determine dominant hand")
+        return False
+
+    # Use mirrored video if player is left-handed
+    if dominant_hand == 'left':
+        video_path_to_process = processed_video_path
+        logger.info(f"Processing mirrored video for left-handed batsman: {processed_video_path}")
+    else:
+        video_path_to_process = video_path
+        logger.info(f"Processing original video for right-handed batsman")
+
     # Initialize MediaPipe Pose
     try:
         mp_pose = mp.solutions.pose
@@ -51,9 +66,9 @@ def analyze_cricket_landmarks(
         return False
 
     # Open video file
-    cap = cv2.VideoCapture(video_path)
+    cap = cv2.VideoCapture(video_path_to_process)
     if not cap.isOpened():
-        logger.error(f"Could not open video file: {video_path}")
+        logger.error(f"Could not open video file: {video_path_to_process}")
         return False
 
     # Get video properties
@@ -98,7 +113,7 @@ def analyze_cricket_landmarks(
                 image = cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
 
                 # Initialize frame data
-                frame_data = {'frame': frame_count, 'time': current_time}
+                frame_data = {'frame': frame_count, 'time': current_time, 'dominant_hand': dominant_hand}
 
                 # Draw pose annotations and collect data
                 if results.pose_landmarks:
@@ -110,7 +125,7 @@ def analyze_cricket_landmarks(
                         mp_drawing.DrawingSpec(color=(0, 0, 255), thickness=2)
                     )
 
-                    # Store landmark data (fixed indentation issue)
+                    # Store landmark data
                     landmarks = results.pose_landmarks.landmark
                     for idx, landmark in enumerate(landmarks):
                         frame_data[f'landmark_{idx}_x'] = landmark.x
@@ -120,15 +135,15 @@ def analyze_cricket_landmarks(
 
                         # Highlight important cricket joints
                         if idx in [mp_pose.PoseLandmark.LEFT_SHOULDER.value,
-                                  mp_pose.PoseLandmark.RIGHT_SHOULDER.value,
-                                  mp_pose.PoseLandmark.LEFT_ELBOW.value,
-                                  mp_pose.PoseLandmark.RIGHT_ELBOW.value,
-                                  mp_pose.PoseLandmark.LEFT_WRIST.value,
-                                  mp_pose.PoseLandmark.RIGHT_WRIST.value,
-                                  mp_pose.PoseLandmark.LEFT_HIP.value,
-                                  mp_pose.PoseLandmark.RIGHT_HIP.value,
-                                  mp_pose.PoseLandmark.LEFT_KNEE.value,
-                                  mp_pose.PoseLandmark.RIGHT_KNEE.value]:
+                                   mp_pose.PoseLandmark.RIGHT_SHOULDER.value,
+                                   mp_pose.PoseLandmark.LEFT_ELBOW.value,
+                                   mp_pose.PoseLandmark.RIGHT_ELBOW.value,
+                                   mp_pose.PoseLandmark.LEFT_WRIST.value,
+                                   mp_pose.PoseLandmark.RIGHT_WRIST.value,
+                                   mp_pose.PoseLandmark.LEFT_HIP.value,
+                                   mp_pose.PoseLandmark.RIGHT_HIP.value,
+                                   mp_pose.PoseLandmark.LEFT_KNEE.value,
+                                   mp_pose.PoseLandmark.RIGHT_KNEE.value]:
                             x = int(landmark.x * width)
                             y = int(landmark.y * height)
                             cv2.circle(image, (x, y), 5, (255, 0, 0), -1)
@@ -170,12 +185,21 @@ def analyze_cricket_landmarks(
         if peaks_info is not None and not peaks_info.empty:
             logger.info("Exporting highlight clips")
             export_success = export_highlight_clips(
-                model_path, video_path, original_frames, peaks_info, fps, os.path.dirname(output_path))
+                model_path, video_path_to_process, original_frames, peaks_info, fps,
+                os.path.dirname(output_path), dominant_hand)
 
             if not export_success:
                 logger.warning("Highlight clip export failed")
         else:
             logger.warning("No significant movements detected")
+
+        # Clean up mirrored video if it exists
+        if dominant_hand == 'left' and os.path.exists(processed_video_path):
+            try:
+                os.remove(processed_video_path)
+                logger.info(f"Removed temporary mirrored video: {processed_video_path}")
+            except Exception as e:
+                logger.error(f"Failed to remove mirrored video: {e}")
 
     logger.info("Analysis complete")
     return True
