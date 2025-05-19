@@ -5,7 +5,7 @@ import mediapipe as mp
 from typing import Dict, Any, Tuple, List
 import uuid
 from ...image_utils import crop_and_save_image
-
+from ...ref_images import ForwardDefence_Backfoot_Heel_ref_images
 
 def get_mediapipe_landmarks(frame_path: str, pose) -> Dict[str, Any]:
     """
@@ -65,7 +65,7 @@ def get_mediapipe_landmarks(frame_path: str, pose) -> Dict[str, Any]:
         return None
 
 
-def analyze_backfoot_toe(frame_path: str, pose) -> Tuple[Dict[str, Any], Dict[str, Any], bool]:
+def analyze_backfoot_heel(frame_path: str, pose) -> Tuple[Dict[str, Any], Dict[str, Any], bool]:
     """
     Analyze backfoot position for a single frame
     Returns:
@@ -104,7 +104,7 @@ def analyze_backfoot_toe(frame_path: str, pose) -> Tuple[Dict[str, Any], Dict[st
     return backfoot, frame_data, heel_lifted
 
 
-def create_backfoot_feedback_image(
+def create_backfoot_heel_feedback_image(
         highlights_folder: str,
         frame_file: str,
         backfoot: Dict[str, Any],
@@ -139,7 +139,7 @@ def create_backfoot_feedback_image(
         return ""
 
 
-def process_backfoot_position(
+def process_backfoot_heel_position(
         highlights_folder: str,
         frame_files: List[str],
         pose,
@@ -155,7 +155,7 @@ def process_backfoot_position(
 
         for frame_file in frame_files:
             frame_path = os.path.join(highlights_folder, frame_file)
-            backfoot, frame_data, heel_lifted = analyze_backfoot_toe(frame_path, pose)
+            backfoot, frame_data, heel_lifted = analyze_backfoot_heel(frame_path, pose)
 
             if backfoot and frame_data:
                 valid_backfoot_data.append({
@@ -172,7 +172,7 @@ def process_backfoot_position(
                 "title": "Backfoot Heel Position Analysis",
                 "image_filename": "",
                 "feedback_text": "Player heel position didn't recognize correctly. Please ensure proper posture for accurate analysis.",
-                "ref-images": ["Backfoot.png", "FootPosition.png"],
+                "ref-images": ForwardDefence_Backfoot_Heel_ref_images,
                 "is_ideal": False
             }
 
@@ -191,7 +191,7 @@ def process_backfoot_position(
             is_ideal = False
 
         # Create feedback image
-        image_filename = create_backfoot_feedback_image(
+        image_filename = create_backfoot_heel_feedback_image(
             highlights_folder,
             selected_frame['frame_file'],
             selected_frame['backfoot'],
@@ -211,7 +211,7 @@ def process_backfoot_position(
             "title": "Backfoot Heel Position Analysis",
             "image_filename": image_filename,
             "feedback_text": feedback_text,
-            "ref-images": ["Backfoot.png", "FootPosition.png"],
+            "ref-images": ForwardDefence_Backfoot_Heel_ref_images,
             "is_ideal": is_ideal
         }
 

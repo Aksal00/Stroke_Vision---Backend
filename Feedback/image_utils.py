@@ -3,30 +3,58 @@ import numpy as np
 import os
 import uuid
 from typing import Tuple
+import mediapipe as mp
+
 
 def crop_and_save_image(
-    original_image_path: str,
-    center_coords: Tuple[int, int],
-    crop_size: int,
-    output_dir: str,
-    mirror_if_left_handed: bool = False
+        original_image_path: str,
+        center_coords: Tuple[int, int],
+        crop_size: int,
+        output_dir: str,
+        mirror_if_left_handed: bool = False
 ) -> str:
     """
-    Crop an image around center coordinates and save it
+    Draw MediaPipe body landmarks and lines on image, then crop around center coordinates and save it.
+
     Args:
         original_image_path: Path to the original image
         center_coords: (x, y) coordinates of the center point
         crop_size: Size of the square crop area
         output_dir: Directory to save the cropped image
         mirror_if_left_handed: Whether to mirror the image for left-handed players
+
     Returns:
-        Filename of the saved cropped image
+        Filename of the saved cropped image with landmarks
     """
     try:
+        # Initialize MediaPipe Pose
+        mp_pose = mp.solutions.pose
+        pose = mp_pose.Pose(static_image_mode=True, min_detection_confidence=0.5)
+        mp_drawing = mp.solutions.drawing_utils
+
         # Read the image
         img = cv2.imread(original_image_path)
         if img is None:
             return ""
+
+        # Convert BGR to RGB
+        img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+
+        # Process the image and detect pose landmarks
+        results = pose.process(img_rgb)
+
+        # Draw landmarks and connections on the image
+        if results.pose_landmarks:
+            # Draw landmarks with custom styling
+            mp_drawing.draw_landmarks(
+                img,
+                results.pose_landmarks,
+                mp_pose.POSE_CONNECTIONS,
+                landmark_drawing_spec=mp_drawing.DrawingSpec(
+                    color=(0, 255, 0), thickness=3, circle_radius=3),
+                connection_drawing_spec=mp_drawing.DrawingSpec(
+                    color=(255, 0, 0), thickness=2)
+            )
 
         # Get image dimensions
         h, w = img.shape[:2]
@@ -56,7 +84,7 @@ def crop_and_save_image(
             else:  # At bottom edge
                 y1 = max(0, y2 - crop_size)
 
-        # Crop the original image
+        # Crop the image with landmarks
         cropped_img = img[y1:y2, x1:x2]
 
         # Mirror if needed for left-handed players
@@ -73,5 +101,9 @@ def crop_and_save_image(
         return feedback_filename
 
     except Exception as e:
-        print(f"[ERROR] Failed to create feedback image: {e}")
+        print(f"[ERROR] Failed to create feedback image with landmarks: {e}")
         return ""
+    finally:
+        # Release MediaPipe resources
+        if 'pose' in locals():
+            pose.close()

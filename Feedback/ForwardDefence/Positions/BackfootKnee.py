@@ -5,7 +5,7 @@ import mediapipe as mp
 from typing import Dict, Any, Tuple, List
 import uuid
 from ...image_utils import crop_and_save_image
-
+from ...ref_images import ForwardDefence_Backfoot_Knee_ref_images
 
 def get_mediapipe_landmarks(frame_path: str, pose) -> Dict[str, Any]:
     """
@@ -160,7 +160,6 @@ def process_backfoot_knee_position(
             backfoot, frame_data, is_left_backfoot = analyze_backfoot_knee(frame_path, pose)
 
             if backfoot and frame_data:
-                # Get the hip x coordinate (same side as backfoot)
                 hip_x = backfoot['hip'][0]
                 valid_backfoot_data.append({
                     'frame_file': frame_file,
@@ -176,7 +175,7 @@ def process_backfoot_knee_position(
                 "title": "Backfoot Knee Position Analysis",
                 "image_filename": "",
                 "feedback_text": "Player knee position didn't recognize correctly. Please ensure proper posture for accurate analysis.",
-                "ref-images": ["Backfoot.png", "Hand.png"],
+                "ref-images": ForwardDefence_Backfoot_Knee_ref_images,  # Updated to use imported array
                 "is_ideal": False
             }
 
@@ -224,7 +223,7 @@ def process_backfoot_knee_position(
             "title": "Backfoot Knee Position Analysis",
             "image_filename": image_filename,
             "feedback_text": feedback_text,
-            "ref-images": ["Backfoot.png", "Hand.png"],
+            "ref-images": ["Forward_Defence_Backfoot_Heel_01.png", "Forward_Defence_Backfoot_Heel_02.png"],
             "is_ideal": is_ideal
         }
 

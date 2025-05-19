@@ -5,7 +5,7 @@ import mediapipe as mp
 from typing import Dict, Any, Tuple, List
 import uuid
 from ...image_utils import crop_and_save_image
-
+from ...ref_images import ForwardDefence_Hand_ref_images
 def get_mediapipe_hand_landmarks(frame_path: str, pose) -> Dict[str, Any]:
     """
     Get MediaPipe landmarks for hands from an image frame
@@ -155,7 +155,7 @@ def process_hand_positions(
                 "title": "Hand Position Analysis",
                 "image_filename": "",
                 "feedback_text": "Player hand positions didn't recognize correctly. Please ensure proper posture for accurate analysis.",
-                "ref-images": ["HandGrip.png", "BatAngle.png"],
+                "ref-images": ForwardDefence_Hand_ref_images,  # Updated to use imported array
                 "is_ideal": False
             }
 

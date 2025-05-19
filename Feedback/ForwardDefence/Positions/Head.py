@@ -5,7 +5,7 @@ import mediapipe as mp
 from typing import Dict, Any, Tuple, List
 import uuid
 from ...image_utils import crop_and_save_image
-
+from ...ref_images import ForwardDefence_Head_ref_images
 
 def get_mediapipe_head_landmarks(frame_path: str, pose) -> Dict[str, Any]:
     """
@@ -157,10 +157,9 @@ def process_head_position(
                 "title": "Head Position Analysis",
                 "image_filename": "",
                 "feedback_text": "Player head position didn't recognize correctly. Please ensure proper posture for accurate analysis.",
-                "ref-images": ["HeadPosition.png", "Stance.png"],
+                "ref-images": ForwardDefence_Head_ref_images,  # Updated to use imported array
                 "is_ideal": False
             }
-
         # Select frame with most right-side nose position
         selected_frame = max(head_data_list, key=lambda x: x['nose_x'])
         head_data = selected_frame['head_data']

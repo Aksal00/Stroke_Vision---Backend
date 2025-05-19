@@ -9,6 +9,8 @@ import shutil
 from werkzeug.utils import secure_filename
 import cv2
 from typing import Dict, Any, Optional
+from file_utils import cleanup_feedback_images
+from video_trimmer import VideoTrimmer
 
 # Set up logging
 logging.basicConfig(
@@ -176,6 +178,11 @@ def analyze_video():
     if not ANALYSIS_MODULES_LOADED:
         return jsonify({'error': 'Analysis modules not available'}), 500
 
+    # Clean up old feedback images before starting new analysis
+    if not cleanup_feedback_images(FEEDBACK_IMAGES_DIR):
+        logging.error("Failed to clean up feedback images directory")
+        # Don't fail the request, just log the error and continue
+
     analysis_id = str(uuid.uuid4())
     output_folder = os.path.join(UPLOAD_FOLDER, analysis_id)
     os.makedirs(output_folder, exist_ok=True)
@@ -205,27 +212,69 @@ def analyze_video():
             logging.error(f"Unsupported file extension: {file_ext}")
             return jsonify({'error': f'Unsupported file format: {file_ext}. Allowed: {ALLOWED_EXTENSIONS}'}), 400
 
-        video_path = os.path.join(output_folder, filename)
-        video_file.save(video_path)
-        logging.info(f"Saved video to {video_path}")
+        # Save original video
+        original_video_path = os.path.join(output_folder, f"original_{filename}")
+        video_file.save(original_video_path)
+        logging.info(f"Saved original video to {original_video_path}")
 
         # Check if file was actually saved and is readable
-        if not os.path.exists(video_path):
-            logging.error(f"File not saved: {video_path}")
+        if not os.path.exists(original_video_path):
+            logging.error(f"File not saved: {original_video_path}")
             return jsonify({'error': 'Failed to save video file'}), 500
 
-        file_size = os.path.getsize(video_path)
+        file_size = os.path.getsize(original_video_path)
         if file_size == 0:
-            logging.error(f"Saved file is empty: {video_path}")
+            logging.error(f"Saved file is empty: {original_video_path}")
             return jsonify({'error': 'Uploaded file is empty'}), 400
 
-        logging.info(f"Video file saved successfully: {video_path}, size: {file_size} bytes")
+        logging.info(f"Video file saved successfully: {original_video_path}, size: {file_size} bytes")
+
+        # Get trim parameters from form data
+        try:
+            trim_start_str = request.form.get('trimStart', '0')
+            trim_end_str = request.form.get('trimEnd', '0')
+
+            trim_start = int(float(trim_start_str))  # Handles decimal strings
+            trim_end = int(float(trim_end_str))
+        except (ValueError, TypeError) as e:
+            logging.error(f"Trim conversion failed: {str(e)}")
+            return jsonify({'error': 'Invalid trim parameters'}), 400
+
+        # Determine which video to analyze (original or trimmed)
+        video_to_analyze = original_video_path
+
+        # If trim times are specified, trim the video
+        if trim_end > 0:
+            # Validate trim times
+            is_valid, error_msg = VideoTrimmer.validate_trim_times(trim_start, trim_end)
+            if not is_valid:
+                logging.error(f"Invalid trim times: {error_msg}")
+                return jsonify({'error': error_msg}), 400
+
+            # Create path for trimmed video
+            trimmed_path = os.path.join(output_folder, f"trimmed_{filename}")
+            logging.info(f"Preparing to trim video to {trimmed_path}")
+
+            # Trim the video
+            success, error = VideoTrimmer.trim_video(
+                original_video_path,
+                trimmed_path,
+                trim_start,
+                trim_end
+            )
+
+            if not success:
+                logging.error(f"Video trimming failed: {error}")
+                return jsonify({'error': 'Video trimming failed'}), 500
+
+            video_to_analyze = trimmed_path
+            logging.info(f"Using trimmed video for analysis: {video_to_analyze}")
 
         # Get dominant hand from form data if available
         dominant_hand = request.form.get('dominantHand', 'right')  # Default to right-handed
         logging.info(f"Using dominant hand: {dominant_hand}")
 
-        # Run analysis
+        # Run analysis on either original or trimmed video
         output_path = os.path.join(output_folder, f"analyzed_{filename}")
 
         logging.info(f"Starting video analysis with model: {MODEL_PATH}")
@@ -233,16 +282,16 @@ def analyze_video():
             logging.error(f"Model file not found: {MODEL_PATH}")
             return jsonify({'error': 'Model file not found'}), 500
 
-        # Log information before and after calling analyze_cricket_landmarks
+        # Log information before calling analyze_cricket_landmarks
         logging.info(f"About to call analyze_cricket_landmarks with parameters:")
         logging.info(f"  - MODEL_PATH: {MODEL_PATH}")
-        logging.info(f"  - video_path: {video_path}")
+        logging.info(f"  - video_path: {video_to_analyze}")
         logging.info(f"  - output_path: {output_path}")
         logging.info(f"  - dominant_hand: {dominant_hand}")
 
         analysis_result = analyze_cricket_landmarks(
             MODEL_PATH,
-            video_path,
+            video_to_analyze,
             output_path,
         )
 

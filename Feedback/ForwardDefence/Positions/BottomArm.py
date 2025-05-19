@@ -6,7 +6,7 @@ from typing import Dict, Any, Tuple, List
 import uuid
 import math
 from ...image_utils import crop_and_save_image
-
+from ...ref_images import ForwardDefence_BottomArm_ref_images
 
 def get_bottom_arm_landmarks(frame_path: str, pose) -> Dict[str, Any]:
     """
@@ -192,13 +192,11 @@ def process_bottom_arm_bend(
             bottom_arm, frame_data, is_bottom_arm_right = analyze_bottom_arm_bend(frame_path, pose)
 
             if bottom_arm and frame_data:
-                # Calculate the bend angle
                 angle = calculate_arm_bend_angle(
                     bottom_arm['shoulder'],
                     bottom_arm['elbow'],
                     bottom_arm['wrist']
                 )
-
                 valid_bottom_arm_data.append({
                     'frame_file': frame_file,
                     'bottom_arm': bottom_arm,
@@ -213,7 +211,7 @@ def process_bottom_arm_bend(
                 "title": "Bottom Arm Bend Analysis",
                 "image_filename": "",
                 "feedback_text": "Player's bottom arm position wasn't recognized correctly. Please ensure proper posture for accurate analysis.",
-                "ref-images": ["BottomArm.png", "HandPosition.png"],
+                "ref-images": ForwardDefence_BottomArm_ref_images,  # Updated to use imported array
                 "is_ideal": False
             }
 

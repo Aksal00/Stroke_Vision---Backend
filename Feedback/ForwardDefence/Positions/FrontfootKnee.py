@@ -6,10 +6,10 @@ from typing import Dict, Any, Tuple, List
 import uuid
 import math
 from ...image_utils import crop_and_save_image
-
+import sys
+from ...ref_images import ForwardDefence_Frontfoot_Knee_ref_images
 
 def get_mediapipe_landmarks(frame_path: str, pose) -> Dict[str, Any]:
-    """Get MediaPipe landmarks from an image frame"""
     try:
         image = cv2.imread(frame_path)
         if image is None:
@@ -59,7 +59,6 @@ def get_mediapipe_landmarks(frame_path: str, pose) -> Dict[str, Any]:
 
 
 def analyze_frontfoot_knee(frame_path: str, pose) -> Tuple[Dict[str, Any], Dict[str, Any], bool]:
-    """Analyze frontfoot knee position for a single frame"""
     frame_data = get_mediapipe_landmarks(frame_path, pose)
     if not frame_data:
         return None, None, None
@@ -71,7 +70,6 @@ def analyze_frontfoot_knee(frame_path: str, pose) -> Tuple[Dict[str, Any], Dict[
     frontfoot = frame_data['right_leg'] if is_frontfoot_right else frame_data['left_leg']
     backfoot = frame_data['left_leg'] if is_frontfoot_right else frame_data['right_leg']
 
-    # Check landmark validity
     frontfoot_valid = (frontfoot['hip'][0] < frontfoot['ankle'][0] and
                        frontfoot['knee'][0] > frontfoot['ankle'][0] and
                        frontfoot['knee'][0] > frontfoot['hip'][0])
@@ -83,21 +81,18 @@ def analyze_frontfoot_knee(frame_path: str, pose) -> Tuple[Dict[str, Any], Dict[
 
 
 def calculate_knee_bend_angle(frontfoot: Dict[str, Any]) -> float:
-    """Calculate the knee bend angle in degrees"""
     hip = np.array(frontfoot['hip'])
     knee = np.array(frontfoot['knee'])
     ankle = np.array(frontfoot['ankle'])
 
-    # Vectors
     hip_knee = knee - hip
     knee_ankle = ankle - knee
 
-    # Calculate angle
     dot_product = np.dot(hip_knee, knee_ankle)
     magnitude_product = np.linalg.norm(hip_knee) * np.linalg.norm(knee_ankle)
 
     if magnitude_product == 0:
-        return 180.0  # Straight leg
+        return 180.0
 
     angle = np.degrees(np.arccos(dot_product / magnitude_product))
     return angle
@@ -110,7 +105,6 @@ def create_frontfoot_knee_feedback_image(
         feedback_images_dir: str,
         is_left_handed: bool = False
 ) -> str:
-    """Create feedback image for frontfoot knee analysis"""
     try:
         frame_path = os.path.join(highlights_folder, frame_file)
         ankle_x, ankle_y = frontfoot['ankle']
@@ -140,7 +134,6 @@ def process_frontfoot_knee_position(
         feedback_images_dir: str,
         is_left_handed: bool = False
 ) -> Dict[str, Any]:
-    """Main function to process frontfoot knee position analysis"""
     try:
         valid_frontfoot_data = []
 
@@ -164,21 +157,16 @@ def process_frontfoot_knee_position(
                 "title": "Frontfoot Knee Position Analysis",
                 "image_filename": "",
                 "feedback_text": "Player front knee position didn't recognize correctly. Please ensure proper posture for accurate analysis.",
-                "ref-images": ["FrontfootKnee.png", "Stance.png"],
+                "ref-images": ForwardDefence_Frontfoot_Knee_ref_images,
                 "is_ideal": False
             }
 
-        # Select frame with most forward frontfoot
         selected_frame = max(valid_frontfoot_data, key=lambda x: x['ankle_x'])
         frontfoot = selected_frame['frontfoot']
 
-        # Calculate knee bend angle
         angle = calculate_knee_bend_angle(frontfoot)
+        is_ideal = 40 <= angle <= 120
 
-        # Determine if position is ideal (good bend angle range)
-        is_ideal = 40 <= angle <= 120  # Adjust these values as needed
-
-        # Generate feedback text
         feedback_text = "Your front knee should be bent to lower your body and get your head over the ball. "
         feedback_text += "This helps with control and makes it easier to smother any bounce or movement off the pitch. "
 
@@ -189,7 +177,6 @@ def process_frontfoot_knee_position(
         else:
             feedback_text += "Your knee is too straight. Try bending it more for better control."
 
-        # Create feedback image
         image_filename = create_frontfoot_knee_feedback_image(
             highlights_folder,
             selected_frame['frame_file'],
@@ -203,7 +190,7 @@ def process_frontfoot_knee_position(
             "title": "Frontfoot Knee Position Analysis",
             "image_filename": image_filename,
             "feedback_text": feedback_text,
-            "ref-images": ["FrontfootKnee.png", "Stance.png"],
+            "ref-images": ForwardDefence_Frontfoot_Knee_ref_images,
             "is_ideal": is_ideal,
             "angle": angle
         }

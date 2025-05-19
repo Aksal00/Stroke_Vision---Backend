@@ -7,7 +7,7 @@ import uuid
 import math
 import logging
 from .image_utils import crop_and_save_image
-
+from .ref_images import Backlift_ref_images
 # Configure logging
 logger = logging.getLogger(__name__)
 
@@ -228,7 +228,7 @@ def process_backlift_angle(
                 "title": "Backlift Angle Analysis",
                 "image_filename": "",
                 "feedback_text": "No highlight clip found for analysis",
-                "ref-images": ["Backlift.png", "BatGrip.png"],
+                "ref-images": Backlift_ref_images,
                 "is_ideal": False
             }
 
@@ -241,7 +241,7 @@ def process_backlift_angle(
                 "title": "Backlift Angle Analysis",
                 "image_filename": "",
                 "feedback_text": "Could not open highlight clip",
-                "ref-images": ["Backlift.png", "BatGrip.png"],
+                "ref-images": Backlift_ref_images,
                 "is_ideal": False
             }
 
@@ -274,7 +274,7 @@ def process_backlift_angle(
                 "title": "Backlift Angle Analysis",
                 "image_filename": "",
                 "feedback_text": "Could not detect proper batting stance. Please ensure proper posture.",
-                "ref-images": ["Backlift.png", "BatGrip.png"],
+                "ref-images": Backlift_ref_images,
                 "is_ideal": False
             }
 
@@ -313,7 +313,7 @@ def process_backlift_angle(
             "title": "Backlift Angle Analysis",
             "image_filename": image_filename,
             "feedback_text": feedback_text,
-            "ref-images": ["Backlift.png", "BatGrip.png"],
+            "ref-images": Backlift_ref_images,
             "is_ideal": is_ideal,
             "angle": angle
         }
@@ -325,6 +325,6 @@ def process_backlift_angle(
             "title": "Backlift Angle Analysis",
             "image_filename": "",
             "feedback_text": "An error occurred during backlift angle analysis.",
-            "ref-images": ["Backlift.png", "BatGrip.png"],
+            "ref-images": Backlift_ref_images,
             "is_ideal": False
         }

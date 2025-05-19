@@ -3,13 +3,14 @@ from typing import List, Dict, Any
 from fastapi import FastAPI, HTTPException
 from fastapi.staticfiles import StaticFiles
 import mediapipe as mp
-from Feedback.ForwardDefence.Positions.BackfootHeel import process_backfoot_position
+from Feedback.ForwardDefence.Positions.BackfootHeel import process_backfoot_heel_position
 from Feedback.ForwardDefence.Positions.BackfootKnee import process_backfoot_knee_position
 from Feedback.ForwardDefence.Positions.FrontfootKnee import process_frontfoot_knee_position
 from Feedback.ForwardDefence.Positions.Hand import process_hand_positions
 from Feedback.ForwardDefence.Positions.Head import process_head_position
 from Feedback.ForwardDefence.Positions.BottomArm import process_bottom_arm_bend
 from Feedback.Backlift import process_backlift_angle
+from Feedback.ForwardDefence.Positions.TopArm import process_top_arm_position
 
 app = FastAPI()
 
@@ -43,13 +44,14 @@ def processfeedback(highlights_folder: str, shot_type: str = None) -> List[Dict[
     ) as pose:
         # Process all feedback types
         feedback_processors = [
-            (process_backfoot_position, "Backfoot Heel"),
+            (process_backfoot_heel_position, "Backfoot Heel"),
             (process_backfoot_knee_position, "Backfoot Knee"),
             (process_frontfoot_knee_position, "Frontfoot Knee"),
             (process_hand_positions, "Hand Position"),
             (process_head_position, "Head Position"),
             (process_bottom_arm_bend, "Bottom Arm Bend"),
-            (process_backlift_angle, "Backlift Angle")
+            (process_backlift_angle, "Backlift Angle"),
+            (process_top_arm_position, "Top Arm Bend")
         ]
 
         for processor, name in feedback_processors:
