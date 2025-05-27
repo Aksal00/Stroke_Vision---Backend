@@ -2,7 +2,7 @@ import cv2
 import numpy as np
 import os
 import uuid
-from typing import Tuple
+from typing import Tuple, List
 import mediapipe as mp
 
 
@@ -107,3 +107,119 @@ def crop_and_save_image(
         # Release MediaPipe resources
         if 'pose' in locals():
             pose.close()
+
+
+def calculate_anticlockwise_angle(
+        point_a: Tuple[float, float],
+        point_b: Tuple[float, float],
+        point_c: Tuple[float, float]
+) -> float:
+    """
+    Calculate the anticlockwise angle between three points (A-B-C).
+
+    Args:
+        point_a: First point (x, y)
+        point_b: Center point (x, y)
+        point_c: Third point (x, y)
+
+    Returns:
+        Angle in degrees (0-360) measured anticlockwise from BA to BC
+    """
+    # Convert points to numpy arrays
+    a = np.array(point_a)
+    b = np.array(point_b)
+    c = np.array(point_c)
+
+    # Calculate vectors
+    ba = a - b
+    bc = c - b
+
+    # Calculate dot product and magnitudes
+    dot_product = np.dot(ba, bc)
+    magnitude_ba = np.linalg.norm(ba)
+    magnitude_bc = np.linalg.norm(bc)
+
+    # Calculate cosine of the angle
+    cosine_angle = dot_product / (magnitude_ba * magnitude_bc)
+
+    # Handle floating point precision issues
+    cosine_angle = np.clip(cosine_angle, -1.0, 1.0)
+
+    # Calculate angle in radians
+    angle_rad = np.arccos(cosine_angle)
+
+    # Calculate cross product to determine direction
+    cross_product = np.cross(ba, bc)
+
+    # Convert to degrees (0-360)
+    angle_deg = np.degrees(angle_rad)
+    if cross_product < 0:
+        angle_deg = 360 - angle_deg
+
+    return angle_deg
+
+
+def calculate_clockwise_angle(
+        point_a: Tuple[float, float],
+        point_b: Tuple[float, float],
+        point_c: Tuple[float, float]
+) -> float:
+    """
+    Calculate the clockwise angle between three points (A-B-C).
+
+    Args:
+        point_a: First point (x, y)
+        point_b: Center point (x, y)
+        point_c: Third point (x, y)
+
+    Returns:
+        Angle in degrees (0-360) measured clockwise from BA to BC
+    """
+    # Calculate anticlockwise angle first
+    angle = calculate_anticlockwise_angle(point_a, point_b, point_c)
+
+    # Convert to clockwise angle
+    clockwise_angle = 360 - angle if angle != 0 else 0
+
+    return clockwise_angle
+
+
+def calculate_distance(
+        point_a: Tuple[float, float],
+        point_b: Tuple[float, float]
+) -> float:
+    """
+    Calculate the Euclidean distance between two points.
+
+    Args:
+        point_a: First point (x, y)
+        point_b: Second point (x, y)
+
+    Returns:
+        Distance between the two points
+    """
+    # Convert points to numpy arrays
+    a = np.array(point_a)
+    b = np.array(point_b)
+
+    # Calculate Euclidean distance
+    distance = np.linalg.norm(a - b)
+
+    return distance
+
+
+# Example usage of the new functions
+if __name__ == "__main__":
+    # Example points
+    A = (0, 0)
+    B = (1, 0)
+    C = (1, 1)
+
+    # Calculate angles
+    acw_angle = calculate_anticlockwise_angle(A, B, C)
+    cw_angle = calculate_clockwise_angle(A, B, C)
+    dist = calculate_distance(A, B)
+
+    print(f"Anticlockwise angle between A-B-C: {acw_angle:.2f} degrees")
+    print(f"Clockwise angle between A-B-C: {cw_angle:.2f} degrees")
+    print(f"Distance between A and B: {dist:.2f} units")

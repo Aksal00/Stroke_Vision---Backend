@@ -15,6 +15,7 @@ ForwardDefence_Head_ref_images = ["Forward_Defence_Head_01.png", "Forward_Defenc
 # Backward Defence
 BackwardDefence_Frontfoot_Knee_ref_images = ["Backward_Defence_Frontfoot_Knee_01.png", "Backward_Defence_Frontfoot_Knee_02.png"]
 BackwardDefence_Backfoot_Heel_ref_images = ["Backward_Defence_Backfoot_Heel_01.png", "Backward_Defence_Backfoot_Heel_02.png"]
+BackwardDefence_Frontfoot_Heel_ref_images = ["Backward_Defence_Backfoot_Heel_01.png", "Backward_Defence_Backfoot_Heel_02.png"]
 BackwardDefence_Backfoot_Knee_ref_images = ["Backward_Defence_Backfoot_Knee_01.png", "Backward_Defence_Backfoot_Knee_02.png"]
 BackwardDefence_BottomArm_ref_images = ["Backward_Defence_BottomArm_01.png", "Backward_Defence_BottomArm_02.png"]
 BackwardDefence_TopArm_ref_images = ["Backward_Defence_TopArm_01.png", "Backward_Defence_TopArm_02.png"]

@@ -1,31 +1,49 @@
 import os
+import shutil
+
 import cv2
 import pandas as pd
 import mediapipe as mp
 import logging
 import numpy as np
 from typing import List, Dict, Any, Optional, Tuple
+from scipy.spatial import distance
+
+from background_remover import process_frame_with_grey_background
+from video_analyzer import select_valid_frames
 
 # Configure logging
 logger = logging.getLogger(__name__)
 
-def export_highlight_clips(
-        model_path: str,
+
+import os
+import cv2
+import pandas as pd
+import mediapipe as mp
+import logging
+import numpy as np
+from typing import List, Dict, Any, Optional, Tuple
+from scipy.spatial import distance
+from rembg import remove
+from PIL import Image
+
+# Configure logging
+logger = logging.getLogger(__name__)
+
+
+def export_highlight_frames(
         video_path: str,
         original_frames: List[np.ndarray],
-        peaks_info: pd.DataFrame,
         fps: float,
         output_folder: str,
         dominant_hand: str
 ) -> bool:
     """
-    Export highlight video clips around movement peaks
+    Export highlight frames based on wrist movement analysis with background removal and grey background
 
     Args:
-        model_path: Path to classification model
         video_path: Original video path
         original_frames: List of video frames
-        peaks_info: DataFrame with peak movement info
         fps: Video frames per second
         output_folder: Root output folder
         dominant_hand: 'left' or 'right' indicating batsman's dominant hand
@@ -38,167 +56,194 @@ def export_highlight_clips(
         highlights_folder = os.path.join(output_folder, "movement_highlights")
         os.makedirs(highlights_folder, exist_ok=True)
 
-        if peaks_info.empty:
-            logger.warning("No significant movements detected")
+        # Create folder for extracted frames
+        frames_folder = os.path.join(highlights_folder, "extracted_frames")
+        os.makedirs(frames_folder, exist_ok=True)
+
+        # Create temp folder for processing
+        temp_folder = os.path.join(highlights_folder, "temp_processing")
+        os.makedirs(temp_folder, exist_ok=True)
+
+        # Initialize MediaPipe Pose
+        mp_pose = mp.solutions.pose
+        pose = mp_pose.Pose(
+            static_image_mode=False,
+            model_complexity=1,
+            smooth_landmarks=True,
+            enable_segmentation=False,
+            smooth_segmentation=True,
+            min_detection_confidence=0.5,
+            min_tracking_confidence=0.5
+        )
+
+        # Initialize lists to store positions
+        left_wrist_normalized = []
+        right_wrist_normalized = []
+        shoulder_widths_normalized = []
+        wrist_distances_normalized = []
+        frame_indices = []
+
+        # Process each frame to get normalized wrist positions
+        for frame_idx, frame in enumerate(original_frames):
+            frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            results = pose.process(frame_rgb)
+
+            if results.pose_landmarks:
+                landmarks = results.pose_landmarks.landmark
+
+                # Extract keypoints and flip Y coordinate
+                keypoints = np.array([[lm.x, 1 - lm.y, lm.z] for lm in landmarks])
+
+                # Hip-centered normalization
+                left_hip = keypoints[23]
+                right_hip = keypoints[24]
+                mid_hip = (left_hip + right_hip) / 2
+                keypoints_normalized = keypoints - mid_hip
+
+                # Scale by torso length
+                neck = keypoints[11]
+                torso_length = np.linalg.norm(neck - mid_hip)
+                if torso_length > 0:
+                    keypoints_normalized /= torso_length
+
+                # Get wrist landmarks
+                left_wrist_norm = keypoints_normalized[15]
+                right_wrist_norm = keypoints_normalized[16]
+
+                # Calculate normalized distances
+                shoulder_width_norm = distance.euclidean(
+                    keypoints_normalized[11][:2],
+                    keypoints_normalized[12][:2])
+                wrist_distance_norm = distance.euclidean(
+                    left_wrist_norm[:2],
+                    right_wrist_norm[:2])
+
+                # Store normalized values
+                shoulder_widths_normalized.append(shoulder_width_norm)
+                wrist_distances_normalized.append(wrist_distance_norm)
+                left_wrist_normalized.append(left_wrist_norm[:2])
+                right_wrist_normalized.append(right_wrist_norm[:2])
+                frame_indices.append(frame_idx)
+
+        pose.close()
+
+        if not frame_indices:
+            logger.warning("No pose landmarks detected in any frame")
             return False
 
-        # Get landmark indices based on dominant hand
-        if dominant_hand == 'left':
-            elbow_idx = mp.solutions.pose.PoseLandmark.LEFT_ELBOW.value
-            shoulder_idx = mp.solutions.pose.PoseLandmark.LEFT_SHOULDER.value
-            wrist_idx = mp.solutions.pose.PoseLandmark.LEFT_WRIST.value
+        # Convert to numpy arrays
+        left_wrist_normalized = np.array(left_wrist_normalized)
+        right_wrist_normalized = np.array(right_wrist_normalized)
+        shoulder_widths_normalized = np.array(shoulder_widths_normalized)
+        wrist_distances_normalized = np.array(wrist_distances_normalized)
+        frame_indices = np.array(frame_indices)
+
+        # Filter positions where wrist distance exceeds max shoulder width
+        max_shoulder_width = np.max(shoulder_widths_normalized)
+        valid_frames = wrist_distances_normalized <= max_shoulder_width
+
+        if not np.any(valid_frames):
+            logger.warning("No valid frames after shoulder width filtering")
+            return False
+
+        filtered_left = left_wrist_normalized[valid_frames]
+        filtered_right = right_wrist_normalized[valid_frames]
+        filtered_frame_indices = frame_indices[valid_frames]
+
+        # Analyze motion direction
+        def analyze_direction(positions):
+            initial_x = positions[0][0]
+            right_distance = 0  # Motion towards positive x (front/right)
+            left_distance = 0  # Motion towards negative x (back/left)
+
+            for i in range(1, len(positions)):
+                current_x = positions[i][0]
+                x_displacement = current_x - initial_x
+
+                if x_displacement > 0:
+                    right_distance += abs(x_displacement)
+                else:
+                    left_distance += abs(x_displacement)
+
+            total_distance = right_distance + left_distance
+            if total_distance > 0:
+                return right_distance / total_distance
+            return 0.5
+
+        left_ratio = analyze_direction(filtered_left)
+        right_ratio = analyze_direction(filtered_right)
+        overall_ratio = (left_ratio + right_ratio) / 2
+
+        # Determine dominant direction
+        if overall_ratio > 0.5:
+            dominant_direction = "front"
+            wrist_x_avg = (filtered_left[:, 0] + filtered_right[:, 0]) / 2
+            top_candidate_indices = np.argsort(wrist_x_avg)[-5:][::-1]  # Get top 5 candidates
         else:
-            elbow_idx = mp.solutions.pose.PoseLandmark.RIGHT_ELBOW.value
-            shoulder_idx = mp.solutions.pose.PoseLandmark.RIGHT_SHOULDER.value
-            wrist_idx = mp.solutions.pose.PoseLandmark.RIGHT_WRIST.value
+            dominant_direction = "back"
+            wrist_x_avg = (filtered_left[:, 0] + filtered_right[:, 0]) / 2
+            top_candidate_indices = np.argsort(wrist_x_avg)[:5]  # Get top 5 candidates
 
-        # Load full landmark data
-        landmark_csv_path = os.path.join(output_folder, 'landmark_data.csv')
-        if not os.path.exists(landmark_csv_path):
-            logger.error("Landmark data file not found")
-            return False
+        # Select frames with valid pose detection
+        highlight_frame_indices, highlight_frames = select_valid_frames(
+            original_frames,
+            filtered_frame_indices,
+            top_candidate_indices,
+            num_frames=3
+        )
 
-        full_landmark_data = pd.read_csv(landmark_csv_path)
+        if len(highlight_frame_indices) < 3:
+            logger.warning(f"Only found {len(highlight_frame_indices)} frames with valid pose detection")
+            if len(highlight_frame_indices) == 0:
+                return False
 
-        # Find max wrist x position
-        max_wrist_x = full_landmark_data[f'landmark_{wrist_idx}_x'].max()
-        max_wrist_x_row = full_landmark_data[
-            full_landmark_data[f'landmark_{wrist_idx}_x'] == max_wrist_x
-            ].iloc[0]
-        max_wrist_x_time = max_wrist_x_row['time']
+        # Process and save the highlight frames with background removal
+        for i, frame_idx in enumerate(highlight_frame_indices):
+            if frame_idx < len(original_frames):
+                frame = original_frames[frame_idx].copy()
 
-        # Filter peaks based on conditions
-        valid_peaks = []
-        fallback_peaks = []
-        exclusion_reasons = {}
+                # Add annotation
+                time_sec = frame_idx / fps
+                cv2.putText(frame, f"Time: {time_sec:.2f}s", (20, 40),
+                            cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 255), 2)
+                cv2.putText(frame, f"Dominant: {dominant_hand}", (20, 80),
+                            cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 255), 2)
+                cv2.putText(frame, f"Direction: {dominant_direction}", (20, 120),
+                            cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 255), 2)
 
-        for idx, peak in peaks_info.iterrows():
-            frame_idx = int(peak['frame'])
-            frame_data = full_landmark_data[full_landmark_data['frame'] == frame_idx].iloc[0]
+                # Save original frame to temp location
+                img_filename = f"highlight_{i + 1}_{dominant_direction}_{dominant_hand}.jpg"
+                temp_path = os.path.join(temp_folder, img_filename)
+                final_path = os.path.join(frames_folder, img_filename)
 
-            elbow_x = frame_data[f'landmark_{elbow_idx}_x']
-            shoulder_x = frame_data[f'landmark_{shoulder_idx}_x']
-            time = peak['time']
+                # Save original to temp
+                cv2.imwrite(temp_path, frame)
 
-            condition1 = elbow_x < shoulder_x  # Elbow left of shoulder
-            condition2 = time > max_wrist_x_time  # After max wrist x time
+                # Process with background removal and grey background
+                if process_frame_with_grey_background(temp_path, final_path):
+                    logger.info(f"Successfully processed and saved highlight frame: {final_path}")
+                else:
+                    # Fallback to original if processing fails
+                    cv2.imwrite(final_path, frame)
+                    logger.warning(f"Used original frame due to processing error: {final_path}")
 
-            if condition1 and not condition2:
-                fallback_peaks.append((idx, peak['total_movement'], time))
-            elif condition1:
-                exclusion_reasons[idx] = (
-                    f"Peak at {time:.2f}s excluded: {dominant_hand.capitalize()} elbow ({elbow_x:.2f}) "
-                    f"is left of {dominant_hand} shoulder ({shoulder_x:.2f})"
-                )
-            elif condition2:
-                exclusion_reasons[idx] = (
-                    f"Peak at {time:.2f}s excluded: Occurs after max wrist x time "
-                    f"({max_wrist_x_time:.2f}s)"
-                )
-            else:
-                valid_peaks.append((idx, peak['total_movement']))
-
-        # Select best peak
-        if valid_peaks:
-            valid_peaks.sort(key=lambda x: x[1], reverse=True)
-            peak_idx, _ = valid_peaks[0]
-            highest_peak = peaks_info.loc[peak_idx]
-            logger.info("Selected highest valid movement peak")
-        elif fallback_peaks:
-            fallback_peaks.sort(key=lambda x: x[2], reverse=True)
-            fallback_idx, _, _ = fallback_peaks[0]
-            highest_peak = peaks_info.loc[fallback_idx]
-            logger.info("Selected fallback peak (no valid peaks found)")
-        else:
-            logger.warning("No valid or fallback peaks available")
-            if exclusion_reasons:
-                logger.info("Peak exclusion reasons:\n" + "\n".join(exclusion_reasons.values()))
-            return False
-
-        # Prepare clip
-        frames_window = int(0.9 * fps)
-        peak_frame = int(highest_peak['frame'])
-        start_frame = max(0, peak_frame - frames_window)
-        end_frame = min(len(original_frames) - 1, peak_frame + frames_window)
-
-        if end_frame - start_frame <= fps / 2:  # Need at least 0.5s of footage
-            logger.warning("Not enough frames for meaningful highlight clip")
-            return False
-
-        # Create clip
-        height, width = original_frames[0].shape[:2]
-        fourcc = cv2.VideoWriter_fourcc(*'mp4v')
-        clip_filename = f"highest_peak_at_{highest_peak['time']:.2f}sec_{dominant_hand}.mp4"
-        clip_path = os.path.join(highlights_folder, clip_filename)
-        clip_writer = cv2.VideoWriter(clip_path, fourcc, fps, (width, height))
-
-        if not clip_writer.isOpened():
-            logger.error(f"Could not create video writer for {clip_path}")
-            return False
-
-        # Capture frames at specific times (0.95s, 1.05s, 1.15s from start)
-        capture_times = [0.95, 1.05, 1.15]
-        frames_to_capture = {
-            t: start_frame + int(t * fps)
-            for t in capture_times
-            if start_frame + int(t * fps) <= end_frame
-        }
-
-        # Write frames to clip
-        for frame_idx in range(start_frame, end_frame + 1):
-            if frame_idx >= len(original_frames):
-                break
-
-            frame = original_frames[frame_idx].copy()
-
-            # Add annotations
-            relative_time = (frame_idx - peak_frame) / fps
-            time_text = f"T{relative_time:+.2f}s from peak"
-            cv2.putText(frame, time_text, (20, 40), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 255), 2)
-            cv2.putText(frame, f"Peak at {highest_peak['time']:.2f}s", (20, 80), cv2.FONT_HERSHEY_SIMPLEX, 1,
-                        (0, 255, 255), 2)
-            cv2.putText(frame, f"Dominant hand: {dominant_hand}", (20, 120), cv2.FONT_HERSHEY_SIMPLEX, 1,
-                        (0, 255, 255), 2)
-
-            if frame_idx == peak_frame:
-                frame = cv2.rectangle(frame, (0, 0), (width - 1, height - 1), (0, 0, 255), 5)
-
-            clip_writer.write(frame)
-
-            # Save specific frames as images
-            for t, target_frame in frames_to_capture.items():
-                if frame_idx == target_frame:
-                    img_filename = f"frame_at_{t:.2f}sec_{dominant_hand}.jpg"
-                    img_path = os.path.join(highlights_folder, img_filename)
-                    cv2.imwrite(img_path, frame)
-
-        clip_writer.release()
-        logger.info(f"Created highlight clip: {clip_path}")
-
-        # Save exclusion reasons if any
-        if exclusion_reasons:
-            exclusion_path = os.path.join(highlights_folder, "peak_exclusion_reasons.txt")
-            with open(exclusion_path, 'w') as f:
-                f.write("Peaks excluded from selection and reasons:\n")
-                f.write("\n".join(exclusion_reasons.values()) + "\n\n")
-                f.write(f"Selected peak at {highest_peak['time']:.2f}s\n")
-                f.write(f"Dominant hand: {dominant_hand}\n")
-
-        # Run shot classification with dominant hand parameter
+        # Clean up temp folder
         try:
-            import shot_classifier
-            shot_classifier.classify_highlight_frames(
-                highlights_folder,
-                model_path,
-                output_folder,
-                dominant_hand=dominant_hand  # Pass dominant hand to classifier
-            )
+            shutil.rmtree(temp_folder)
         except Exception as e:
-            logger.error(f"Shot classification failed: {e}")
-            return False
+            logger.warning(f"Could not clean up temp folder: {e}")
+
+        # Save motion analysis results
+        analysis_path = os.path.join(highlights_folder, "motion_analysis.txt")
+        with open(analysis_path, 'w') as f:
+            f.write(f"Dominant Hand: {dominant_hand}\n")
+            f.write(f"Dominant Direction: {dominant_direction}\n")
+            f.write(f"Front Ratio: {overall_ratio:.2f}\n")
+            f.write(f"Highlight Frames: {highlight_frame_indices}\n")
+            f.write(f"Frame Times: {highlight_frame_indices / fps}\n")
 
         return True
 
     except Exception as e:
-        logger.error(f"Error generating highlight clip: {e}")
+        logger.error(f"Error generating highlight frames: {e}")
         return False

@@ -9,7 +9,7 @@ import matplotlib
 matplotlib.use('Agg')
 
 
-class DriveClassifier:
+class DefenceClassifier:
     def __init__(self):
         """Initialize MediaPipe Pose solution"""
         self.mp_pose = mp.solutions.pose
@@ -22,14 +22,12 @@ class DriveClassifier:
         )
 
         # Landmark indices
-        self.left_elbow = self.mp_pose.PoseLandmark.LEFT_ELBOW.value
-        self.right_elbow = self.mp_pose.PoseLandmark.RIGHT_ELBOW.value
         self.left_ankle = self.mp_pose.PoseLandmark.LEFT_ANKLE.value
         self.right_ankle = self.mp_pose.PoseLandmark.RIGHT_ANKLE.value
 
-    def classify_drive(self, video_path, output_folder):
+    def classify_defence(self, video_path, output_folder):
         """
-        Classify a cricket drive shot into front foot or back foot drive
+        Classify a cricket defence shot into front foot or back foot defence
 
         Args:
             video_path (str): Path to input video
@@ -68,16 +66,11 @@ class DriveClassifier:
             frame_data = {
                 'frame': frame_count,
                 'time': time,
-                'is_drive': False,
                 'ankle_distance': 0
             }
 
             if results.pose_landmarks:
                 landmarks = results.pose_landmarks.landmark
-
-                # Check drive condition (elbow positions)
-                if landmarks[self.right_elbow].x > landmarks[self.left_elbow].x:
-                    frame_data['is_drive'] = True
 
                 # Calculate ankle distance
                 left_ankle_pos = np.array([landmarks[self.left_ankle].x, landmarks[self.left_ankle].y])
@@ -93,51 +86,62 @@ class DriveClassifier:
         # Convert to DataFrame
         df = pd.DataFrame(frames_data)
 
-        # Determine if it's a drive
-        drive_frames = df[df['is_drive']].shape[0]
-        if drive_frames < 5:  # Not enough drive frames
-            return "Not a drive shot (insufficient drive characteristics)"
-
         # Classify footwork
         before_mid = df[df['frame'] <= mid_frame]['ankle_distance'].sum()
         after_mid = df[df['frame'] > mid_frame]['ankle_distance'].sum()
         diff = after_mid - before_mid
 
         if diff > 0.1:
-            result = "Front Foot Drive"
+            result = "Front Foot Defence"
         elif diff < -0.1:
-            result = "Back Foot Drive"
+            result = "Back Foot Defence"
         else:
-            result = "Drive (Footwork unclear)"
+            result = "Defence (Footwork unclear)"
 
         # Save results
-        self._save_results(df, result, output_folder)
+        self._save_results(df, result, output_folder, before_mid, after_mid, diff, total_frames)
         return result
 
-    def _save_results(self, df, result, output_folder):
+    def _save_results(self, df, result, output_folder, before_mid, after_mid, diff, total_frames):
         """Save analysis results and plots"""
         # Save data to CSV
-        df.to_csv(os.path.join(output_folder, "drive_analysis.csv"), index=False)
+        df.to_csv(os.path.join(output_folder, "defence_analysis.csv"), index=False)
 
         # Create and save plot
         plt.figure(figsize=(10, 6))
         plt.plot(df['time'], df['ankle_distance'])
+        plt.axvline(x=df.iloc[len(df)//2]['time'], color='r', linestyle='--', label='Mid Point')
         plt.title('Ankle Distance Over Time')
         plt.xlabel('Time (seconds)')
         plt.ylabel('Normalized Distance')
+        plt.legend()
         plt.grid(True)
         plt.savefig(os.path.join(output_folder, "ankle_distance_plot.png"))
         plt.close()
 
+        # Create detailed report
+        report = (
+            f"Defence Classification Analysis:\n"
+            f"===============================\n"
+            f"Total frames analyzed: {total_frames}\n"
+            f"Ankle distance sum (first half): {before_mid:.4f}\n"
+            f"Ankle distance sum (second half): {after_mid:.4f}\n"
+            f"Difference (after - before): {diff:.4f}\n"
+            f"\nClassification Logic:\n"
+            f"- Positive difference indicates feet moving apart (Front Foot)\n"
+            f"- Negative difference indicates feet coming together (Back Foot)\n"
+            f"- Threshold of ±0.1 used to determine significant movement\n"
+            f"\nFinal Classification: {result}\n"
+        )
+
         # Save report
-        report = f"Classification Result: {result}"
-        with open(os.path.join(output_folder, "report.txt"), 'w') as f:
+        with open(os.path.join(output_folder, "defence_classification_report.txt"), 'w') as f:
             f.write(report)
 
 
-def process_drive_classification(video_path, output_folder):
+def process_defence_classification(video_path, output_folder):
     """
-    Main function to process drive classification
+    Main function to process defence classification
 
     Args:
         video_path (str): Path to input video
@@ -147,7 +151,7 @@ def process_drive_classification(video_path, output_folder):
         str: Classification result
     """
     try:
-        classifier = DriveClassifier()
-        return classifier.classify_drive(video_path, output_folder)
+        classifier = DefenceClassifier()
+        return classifier.classify_defence(video_path, output_folder)
     except Exception as e:
-        return f"Error during drive classification: {str(e)}"
+        return f"Error during defence classification: {str(e)}"

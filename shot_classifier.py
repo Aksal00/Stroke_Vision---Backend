@@ -1,125 +1,203 @@
 import os
+import traceback
 import numpy as np
 import cv2
 import logging
 from typing import List, Tuple, Dict, Any, Optional
 import keras
 from flask import json
-
-from Feedback.ForwardDefence.ForwardDefence import processfeedback
+import mediapipe as mp
+from Feedback.ForwardDefence.ForwardDefence import process_forward_defence_feedback
+from Feedback.BackwardDefence.BackwardDefence import process_backward_defence_feedback
+from result_writer import write_classification_results
 
 # Set up logging
 logger = logging.getLogger(__name__)
+
+# Initialize MediaPipe Pose
+mp_pose = mp.solutions.pose
+mp_drawing = mp.solutions.drawing_utils
+mp_drawing_styles = mp.solutions.drawing_styles
+
+pose = mp_pose.Pose(
+    static_image_mode=True,
+    model_complexity=2,
+    enable_segmentation=False,
+    min_detection_confidence=0.5
+)
 
 # Model caching
 _model_cache = None
 
 
 def load_shot_classifier_model(model_path: str) -> Optional[keras.Model]:
-    """
-    Load and cache the shot classification model
-    Args:
-        model_path: Path to the trained model file
-    Returns:
-        Loaded Keras model or None if failed
-    """
+    """Load and cache the shot classification model"""
     global _model_cache
 
     if _model_cache is not None:
-        print(f"[INFO] Using cached model")
+        logger.info("Using cached model")
         return _model_cache
 
     try:
-        print(f"[INFO] Loading model from {model_path}")
         logger.info(f"Loading model from {model_path}")
         _model_cache = keras.models.load_model(model_path)
-        print(f"[SUCCESS] Model loaded successfully")
+        logger.info("Model loaded successfully")
         return _model_cache
     except Exception as e:
         logger.error(f"Error loading model: {e}")
-        print(f"[ERROR] Failed to load model: {e}")
         return None
 
 
-def predict_top_shots(
+def extract_and_normalize_keypoints(img_path: str) -> Optional[np.ndarray]:
+    """Extract and normalize MediaPipe keypoints from an image"""
+    try:
+        img = cv2.imread(img_path)
+        if img is None:
+            logger.error(f"Could not read image at {img_path}")
+            return None
+
+        # Convert BGR to RGB
+        img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+        results = pose.process(img_rgb)
+
+        if not results.pose_landmarks:
+            logger.warning(f"No pose detected in {os.path.basename(img_path)}")
+            return None
+
+        # Extract all 33 landmarks (x,y,z)
+        keypoints = []
+        for landmark in results.pose_landmarks.landmark:
+            keypoints.extend([landmark.x, landmark.y, landmark.z])
+
+        keypoints = np.array(keypoints).reshape(-1, 3)  # Reshape to (33, 3)
+
+        # Hip-centered normalization
+        left_hip = keypoints[23]
+        right_hip = keypoints[24]
+        mid_hip = (left_hip + right_hip) / 2
+        keypoints_normalized = keypoints - mid_hip
+
+        # Scale by torso length (neck to mid-hip distance)
+        neck = keypoints[11]  # Using shoulder as neck approximation
+        torso_length = np.linalg.norm(neck - mid_hip)
+
+        if torso_length > 0:
+            keypoints_normalized /= torso_length
+        else:
+            logger.warning(f"Zero torso length detected in {os.path.basename(img_path)}")
+            return None
+
+        return keypoints_normalized.flatten()  # Return as flat array (99 values)
+
+    except Exception as e:
+        logger.error(f"Error extracting keypoints from {img_path}: {e}")
+        return None
+
+
+def save_frame_with_landmarks(img_path: str, output_path: str, confidence: float) -> bool:
+    """Save frame with MediaPipe pose landmarks drawn on it"""
+    try:
+        img = cv2.imread(img_path)
+        if img is None:
+            logger.error(f"Could not read image at {img_path}")
+            return False
+
+        # Convert BGR to RGB for MediaPipe processing
+        img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+        results = pose.process(img_rgb)
+
+        if not results.pose_landmarks:
+            logger.warning(f"No pose detected in {os.path.basename(img_path)}")
+            return False
+
+        # Draw landmarks on the original BGR image
+        mp_drawing.draw_landmarks(
+            img,
+            results.pose_landmarks,
+            mp_pose.POSE_CONNECTIONS,
+            landmark_drawing_spec=mp_drawing_styles.get_default_pose_landmarks_style()
+        )
+
+        # Add confidence text
+        height, width = img.shape[:2]
+        font_scale = max(0.5, min(width, height) / 1000)
+        thickness = max(1, int(font_scale * 2))
+
+        cv2.putText(
+            img,
+            f"Confidence: {confidence:.2%}",
+            (10, 30),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            font_scale,
+            (0, 255, 0),  # Green color
+            thickness
+        )
+
+        # Save the image
+        success = cv2.imwrite(output_path, img)
+        if success:
+            logger.info(f"Saved frame with landmarks to {output_path}")
+        else:
+            logger.error(f"Failed to save frame with landmarks to {output_path}")
+
+        return success
+
+    except Exception as e:
+        logger.error(f"Error saving frame with landmarks: {e}")
+        return False
+
+
+def predict_top_shots_from_keypoints(
         model: keras.Model,
         img_path: str,
         class_names: List[str],
-        img_size: int = 224,
         top_n: int = 3
 ) -> List[Tuple[str, float]]:
-    """
-    Predict top shot classes from an image
-    Args:
-        model: Loaded Keras model
-        img_path: Path to input image
-        class_names: List of class names
-        img_size: Target image size
-        top_n: Number of top predictions to return
-    Returns:
-        List of (class_name, confidence) tuples
-    """
+    """Predict top shot classes from keypoints extracted from an image"""
     try:
-        # Load and preprocess image
-        print(f"[INFO] Processing image: {os.path.basename(img_path)}")
-        img = cv2.imread(img_path)
-        if img is None:
-            print(f"[ERROR] Could not read image at {img_path}")
-            raise ValueError(f"Could not read image at {img_path}")
+        # Extract and normalize keypoints
+        keypoints = extract_and_normalize_keypoints(img_path)
+        if keypoints is None:
+            logger.warning(f"Could not extract keypoints from {img_path}")
+            return [("NoPoseDetected", 0.0)]
 
-        img = cv2.resize(img, (img_size, img_size))
-        img = img.astype('float32') / 255.0
-        img = np.expand_dims(img, axis=0)
+        # Verify keypoints shape
+        if len(keypoints) != 99:  # 33 landmarks * 3 coordinates
+            logger.error(f"Invalid keypoints shape for {img_path}")
+            return [("InvalidKeypoints", 0.0)]
+
+        # Reshape for prediction (batch of 1)
+        keypoints = np.expand_dims(keypoints, axis=0)
 
         # Make prediction
-        print(f"[INFO] Running prediction on {os.path.basename(img_path)}")
-        preds = model.predict(img, verbose=0)[0]
+        preds = model.predict(keypoints, verbose=0)[0]
         top_indices = np.argsort(preds)[-top_n:][::-1]
-        results = [(class_names[i], float(preds[i])) for i in top_indices]
-        print(f"[RESULT] Top prediction: {results[0][0]} ({results[0][1]:.2%})")
-        return results
+        return [(class_names[i], float(preds[i])) for i in top_indices]
 
     except Exception as e:
         logger.error(f"Error predicting image {img_path}: {e}")
-        print(f"[ERROR] Failed to predict image {img_path}: {e}")
         return [("Error", 0.0)]
 
 
 def calculate_weighted_prediction(top_predictions: List[Tuple[str, float]]) -> str:
-    """
-    Calculate weighted prediction from multiple predictions
-    Args:
-        top_predictions: List of (class, confidence) tuples
-    Returns:
-        Formatted prediction string
-    """
-    print(f"[INFO] Calculating weighted prediction from {len(top_predictions)} predictions")
+    """Calculate weighted prediction from multiple predictions"""
     class_scores = {}
     for pred_class, confidence in top_predictions:
         class_scores[pred_class] = class_scores.get(pred_class, 0.0) + confidence
 
     if not class_scores:
-        print(f"[WARNING] No predictions available for weighted calculation")
+        logger.warning("No predictions available for weighted calculation")
         return "No predictions available"
 
     weighted_pred = max(class_scores.items(), key=lambda x: x[1])
     avg_confidence = weighted_pred[1] / len(top_predictions)
-    result = f"{weighted_pred[0]} ({avg_confidence:.2%} avg)"
-    print(f"[RESULT] Weighted prediction: {result}")
-    return result
+    return f"{weighted_pred[0]} ({avg_confidence:.2%} avg)"
 
 
 def combine_frame_predictions(results: Dict[str, Any]) -> str:
-    """
-    Combine predictions from multiple frames
-    Args:
-        results: Dictionary of frame predictions
-    Returns:
-        Combined prediction string
-    """
-    print(f"[INFO] Combining predictions from {len(results)} frames")
+    """Combine predictions from multiple frames"""
     if not results:
-        print(f"[WARNING] No frames available for prediction")
+        logger.warning("No frames available for prediction")
         return "No frames available for prediction"
 
     vote_counts = {}
@@ -132,318 +210,260 @@ def combine_frame_predictions(results: Dict[str, Any]) -> str:
             confidence_sums[top_class] = confidence_sums.get(top_class, 0.0) + top_predictions[0][1]
 
     if not vote_counts:
-        print(f"[WARNING] No valid predictions available")
+        logger.warning("No valid predictions available")
         return "No valid predictions available"
-
-    print(f"[INFO] Vote counts: {vote_counts}")
-    print(f"[INFO] Confidence sums: {confidence_sums}")
 
     max_votes = max(vote_counts.values())
     winning_classes = [cls for cls, votes in vote_counts.items() if votes == max_votes]
-    print(f"[INFO] Classes with max votes ({max_votes}): {winning_classes}")
 
     if len(winning_classes) > 1:
-        print(f"[INFO] Multiple classes tie for votes, breaking tie by confidence")
         max_confidence = max(confidence_sums[cls] for cls in winning_classes)
         confident_classes = [cls for cls in winning_classes if confidence_sums[cls] == max_confidence]
 
         if len(confident_classes) > 1:
-            print(f"[INFO] Multiple classes tie for confidence as well")
             return "Stroke cannot be clearly identified (multiple possibilities)"
-        print(f"[INFO] Tie broken by confidence, winner: {confident_classes[0]}")
-        return f"Likely {confident_classes[0]} (tie broken by confidence)"
+        return f"{confident_classes[0]}"
 
     avg_confidence = confidence_sums[winning_classes[0]] / vote_counts[winning_classes[0]]
-    final_prediction = f"Final Prediction: {winning_classes[0]} (confidence: {avg_confidence:.2%})"
-    print(f"[RESULT] {final_prediction}")
-    return final_prediction
+    return f"Final Prediction: {winning_classes[0]}"
 
 
-def find_highlight_clip(highlights_folder: str, output_folder: str) -> Optional[str]:
-    """
-    Find the highlight clip in the highlights folder or parent directories
-    Args:
-        highlights_folder: Path to the highlights folder
-        output_folder: Root output folder
-    Returns:
-        Path to the highlight clip or None if not found
-    """
-    print(f"[INFO] Searching for highlight clip in {highlights_folder}")
-    # First check in highlights folder
-    highlight_clips = [f for f in os.listdir(highlights_folder)
-                       if f.endswith('.mp4') and 'highest_peak' in f]
+def get_top_confidence_frames(results: Dict[str, Any], top_n: int = 3) -> List[Tuple[str, float]]:
+    """Get the top N frames with highest confidence scores"""
+    frame_confidences = []
 
-    # If not found, check parent folder
-    if not highlight_clips:
-        print(f"[INFO] No highlight clip in main folder, checking parent folder")
-        parent_folder = os.path.dirname(highlights_folder)
-        highlight_clips = [f for f in os.listdir(parent_folder)
-                           if f.endswith('.mp4') and 'highest_peak' in f]
-        if highlight_clips:
-            result = os.path.join(parent_folder, highlight_clips[0])
-            print(f"[INFO] Found highlight clip in parent folder: {os.path.basename(result)}")
-            return result
-        else:
-            print(f"[INFO] Checking output folder as fallback")
-            # Check output_folder as final fallback
-            highlight_clips = [f for f in os.listdir(output_folder)
-                               if f.endswith('.mp4') and 'highest_peak' in f]
-            if highlight_clips:
-                result = os.path.join(output_folder, highlight_clips[0])
-                print(f"[INFO] Found highlight clip in output folder: {os.path.basename(result)}")
-                return result
-            print(f"[WARNING] No highlight clip found")
+    for frame_path, (top_predictions, _) in results.items():
+        if top_predictions and top_predictions[0][0] not in ["Error", "NoPoseDetected", "InvalidKeypoints"]:
+            confidence = top_predictions[0][1]  # Get the top prediction's confidence
+            frame_confidences.append((frame_path, confidence))
 
-    if highlight_clips:
-        result = os.path.join(highlights_folder, highlight_clips[0])
-        print(f"[INFO] Found highlight clip: {os.path.basename(result)}")
-        return result
-    else:
-        print(f"[WARNING] No highlight clip found after searching all locations")
-        return None
+    # Sort by confidence in descending order
+    frame_confidences.sort(key=lambda x: x[1], reverse=True)
+
+    # Return top N frames
+    return frame_confidences[:top_n]
 
 
 def apply_further_classification(
-        clip_path: str,
         final_prediction: str,
         output_folder: str,
+        video_path: str
 ) -> str:
-    """
-    Apply further classification based on the initial prediction
-    Args:
-        clip_path: Path to the highlight video clip
-        final_prediction: The initial final prediction
-        output_folder: Root output folder
-        dominant_hand: 'left' or 'right' indicating batsman's dominant hand
-    Returns:
-        The further classification result (just the stroke name)
-    """
-    print(f"[INFO] Starting further classification process")
-    print(f"[INFO] Initial prediction: {final_prediction}")
+    """Apply further classification based on the initial prediction"""
+    logger.info(f"Starting further classification with prediction: {final_prediction}")
 
+    # Initialize final_stroke with a default value
+    final_stroke = final_prediction.split(':')[-1].strip().split('(')[0].strip().lower()
 
-    if not clip_path:
-        # Extract base stroke name with the same improved logic
-        if "Final Prediction:" in final_prediction:
-            parts = final_prediction.split("Final Prediction:")
-            prediction_part = parts[1].strip()
-            base_stroke = prediction_part.split("(")[0].strip()
-        else:
-            # Fallback case if format is different
-            base_stroke = final_prediction.split(':')[-1].strip().split('(')[0].strip()
-        # Capitalize first letter before returning
-        base_stroke = base_stroke[0].upper() + base_stroke[1:].lower()
-        print(f"[WARNING] No clip path available for further classification")
-        print(f"[RESULT] Using base stroke without further classification: {base_stroke}")
-        return base_stroke
+    # Extract base stroke name
+    if "Final Prediction:" in final_prediction:
+        parts = final_prediction.split("Final Prediction:")
+        prediction_part = parts[1].strip()
+        base_stroke = prediction_part.split("(")[0].strip().lower()
+    else:
+        base_stroke = final_prediction.split(':')[-1].strip().split('(')[0].strip().lower()
 
-    try:
-        # Extract base stroke name
-        # Fix the extraction logic to properly get the stroke name
-        if "Final Prediction:" in final_prediction:
-            parts = final_prediction.split("Final Prediction:")
-            prediction_part = parts[1].strip()
-            base_stroke = prediction_part.split("(")[0].strip().lower()
-        else:
-            # Fallback case if format is different
-            base_stroke = final_prediction.split(':')[-1].strip().split('(')[0].strip().lower()
-        print(f"[INFO] Base stroke extracted: {base_stroke}")
+    logger.info(f"Base stroke extracted: {base_stroke}")
 
-        # DRIVE CLASSIFICATION
-        if "drive" in base_stroke:
-            print(f"[INFO] Detected drive shot, starting drive classification")
+    # If base stroke is defence, run defence classifier
+    if base_stroke == "defence":
+        try:
+            from FurtherClassification.defence_classifier import process_defence_classification
+            defence_output_folder = os.path.join(output_folder, "defence_analysis")
+            os.makedirs(defence_output_folder, exist_ok=True)
+
+            logger.info(f"Running defence classifier on video: {video_path}")
+            defence_result = process_defence_classification(video_path, defence_output_folder)
+
+            # Update the final stroke name with more specific defence type
+            if defence_result:
+                final_stroke = defence_result.split("(")[0].strip().lower()
+            logger.info(f"Defence classifier result: {defence_result}")
+        except Exception as e:
+            logger.error(f"Error running defence classifier: {str(e)}")
+            # Fall back to generic defence if classifier fails
+            final_stroke = "defence"
+
+    elif base_stroke == "drive":
+        try:
             from FurtherClassification.drive_classifier import process_drive_classification
-            result = process_drive_classification(clip_path, output_folder)
-            print(f"[RESULT] Drive classification result: {result}")
-            return result
+            drive_output_folder = os.path.join(output_folder, "drive_analysis")
+            os.makedirs(drive_output_folder, exist_ok=True)
 
-        # LEG GLANCE/FLICK CLASSIFICATION
-        elif "legglance-flick" in base_stroke:
-            print(f"[INFO] Detected leg glance/flick shot, starting specialized classification")
-            from FurtherClassification.legglance_classifier import process_leg_glance_classification
-            result = process_leg_glance_classification(clip_path, output_folder)
-            print(f"[RESULT] Leg glance classification result: {result}")
-            return result
+            logger.info(f"Running drive classifier on video: {video_path}")
+            drive_result = process_drive_classification(video_path, drive_output_folder)
 
-        # PULL SHOT CLASSIFICATION
-        elif "pullshot" in base_stroke:
-            print(f"[INFO] Detected pull shot, starting pull shot classification")
-            from FurtherClassification.pullshot_classifier import process_pullshot_classification
-            result = process_pullshot_classification(clip_path, output_folder)
-            print(f"[RESULT] Pull shot classification result: {result}")
-            return result
+            # Update the final stroke name with more specific drive type
+            if drive_result:
+                final_stroke = drive_result.split("(")[0].strip().lower()
+            logger.info(f"Drive classifier result: {drive_result}")
+        except Exception as e:
+            logger.error(f"Error running drive classifier: {str(e)}")
+            # Fall back to generic drive if classifier fails
+            final_stroke = "drive"
 
-        # For other strokes, return the base stroke name with first letter capitalized
-        base_stroke = base_stroke[0].upper() + base_stroke[1:].lower()
-        print(f"[INFO] No specialized classifier for {base_stroke}, using base class")
-        return base_stroke
+    # Only capitalize if we have a non-empty string
+    if final_stroke:
+        final_stroke = final_stroke[0].upper() + final_stroke[1:].lower()
+    else:
+        final_stroke = "Unknown"  # Fallback value
 
-    except Exception as e:
-        logger.error(f"Error during further classification: {e}")
-        print(f"[ERROR] Failed during further classification: {e}")
-        # Capitalize first letter before returning
-        base_stroke = base_stroke[0].upper() + base_stroke[1:].lower()
-        print(f"[FALLBACK] Using base stroke name: {base_stroke}")
-        return base_stroke
-
+    return final_stroke
 
 def classify_highlight_frames(
         highlights_folder: str,
         model_path: str,
         output_folder: str,
-        dominant_hand: str
+        dominant_hand: str,
+        video_path: str  # Add video_path parameter
 ) -> Dict[str, Any]:
-    """
-    Classify frames from highlight clips and generate results
-    Args:
-        highlights_folder: Path to folder containing highlight frames
-        model_path: Path to classification model
-        output_folder: Root output folder
-        dominant_hand: 'left' or 'right' indicating batsman's dominant hand
-    Returns:
-        Dictionary containing classification results
-    """
-    print(f"\n[INFO] ===== STARTING SHOT CLASSIFICATION PROCESS =====")
-    print(f"[INFO] Highlights folder: {highlights_folder}")
-    print(f"[INFO] Model path: {model_path}")
-    print(f"[INFO] Dominant hand: {dominant_hand}")
+    """Classify frames from highlight clips using MediaPipe keypoints"""
+    logger.info(f"Starting shot classification process")
 
-    # Define class names
-    class_names = ['drive', 'legglance-flick', 'pullshot', 'sweep', 'frontfootdefence']  # Added frontfootdefence
-    logger.info(f"Classifying with classes: {class_names}")
-    print(f"[INFO] Using classes: {class_names}")
-
-    # Load model
-    print(f"[INFO] Loading classification model")
-    model = load_shot_classifier_model(model_path)
-    if model is None:
-        print(f"[ERROR] Failed to load model, aborting classification")
-        return {}
-
-    # Find frame images
-    print(f"[INFO] Looking for frame images in {highlights_folder}")
-    frame_files = [f for f in os.listdir(highlights_folder) if f.lower().endswith('.jpg')]
-    if not frame_files:
-        logger.warning("No frame images found in highlights folder")
-        print(f"[WARNING] No frame images found in highlights folder")
-        return {}
-    print(f"[INFO] Found {len(frame_files)} frame images")
-
-    # Prepare output folders
-    results_folder = os.path.join(highlights_folder, "shot_classifications")
-    os.makedirs(results_folder, exist_ok=True)
-    print(f"[INFO] Results will be saved to {results_folder}")
-
-    # Classify each frame
-    print(f"[INFO] Starting frame-by-frame classification")
-    results = {}
-    for frame_file in frame_files:
-        print(f"\n[INFO] Processing frame: {frame_file}")
-        frame_path = os.path.join(highlights_folder, frame_file)
-        top_predictions = predict_top_shots(model, frame_path, class_names, top_n=3)
-        weighted_pred = calculate_weighted_prediction(top_predictions)
-        results[frame_path] = (top_predictions, weighted_pred)
-
-        # Save visualization (optional)
-        viz_path = os.path.join(results_folder, f"classified_{frame_file}")
-        try:
-            img = cv2.imread(frame_path)
-            if img is not None:
-                cv2.imwrite(viz_path, img)
-                print(f"[INFO] Saved visualization to {os.path.basename(viz_path)}")
-        except Exception as e:
-            logger.warning(f"Could not save visualization for {frame_file}: {e}")
-            print(f"[WARNING] Could not save visualization for {frame_file}: {e}")
-
-    # Generate initial final prediction
-    print(f"\n[INFO] Generating initial prediction from all frames")
-    initial_final_prediction = combine_frame_predictions(results)
-
-    # Find highlight clip for further classification
-    print(f"\n[INFO] Looking for highlight clip for further classification")
-    clip_path = find_highlight_clip(highlights_folder, output_folder)
-
-    # Apply further classification to get the final stroke name
-    print(f"\n[INFO] Starting further classification to determine final stroke name")
-    final_stroke_name = apply_further_classification(
-        clip_path,
-        initial_final_prediction,
-        output_folder
-    )
-    print(f"\n[FINAL RESULT] Final stroke name: {final_stroke_name}")
-
-    # Process feedback if the stroke is Front Foot Defence
-    feedback_data = []
-    if final_stroke_name.lower() == "front foot defence":
-        print(f"[INFO] Processing feedback for Front Foot Defence")
-        try:
-            feedback_data = processfeedback(highlights_folder, output_folder)
-            print(f"[INFO] Generated {len(feedback_data)} feedback items")
-            print(f"Feedback data: {feedback_data}")
-        except Exception as e:
-            print(f"[ERROR] Failed to process feedback: {e}")
-
-    # Save results to file
-    print(f"[INFO] Saving comprehensive results to file")
-    report_path = os.path.join(results_folder, "classification_summary.txt")
+    # Initialize result with error field
+    result = {
+        'frame_predictions': {},
+        'initial_prediction': "Analysis failed",
+        'final_stroke_name': "Unknown",
+        'dominant_hand': dominant_hand,
+        'feedback_data': [],
+        'report_path': None,
+        'error': None,
+        'processing_stats': {
+            'total_frames': 0,
+            'successful_predictions': 0,
+            'failed_predictions': 0,
+            'landmark_frames_saved': 0
+        }
+    }
 
     try:
-        with open(report_path, 'w') as f:
-            f.write("=== FRAME-BY-FRAME PREDICTIONS ===\n")
-            for path, (top_preds, weighted_pred) in results.items():
-                f.write(f"\n{os.path.basename(path)}:\n")
-                for i, (cls, conf) in enumerate(top_preds, 1):
-                    f.write(f"{i}. {cls} ({conf:.2%})\n")
-                f.write(f"Weighted: {weighted_pred}\n")
+        # Create necessary folders if they don't exist
+        os.makedirs(highlights_folder, exist_ok=True)
+        frame_folder = os.path.join(highlights_folder, "extracted_frames")
+        os.makedirs(frame_folder, exist_ok=True)
+        results_folder = os.path.join(highlights_folder, "shot_classifications")
+        os.makedirs(results_folder, exist_ok=True)  # This is the missing folder
+        landmarks_folder = os.path.join(highlights_folder, "frames_with_landmarks")
+        os.makedirs(landmarks_folder, exist_ok=True)
 
-            f.write("\n=== INITIAL FINAL PREDICTION ===\n")
-            f.write(f"{initial_final_prediction}\n")
+        # Define class names
+        class_names = ['cut', 'defence', 'drive', 'legglance', 'pullshot', 'sweep']
+        logger.info(f"Using classes: {class_names}")
 
-            f.write("\n=== FINAL STROKE NAME ===\n")
-            f.write(f"{final_stroke_name}\n")
+        # Load model
+        model = load_shot_classifier_model(model_path)
+        if model is None:
+            error_msg = "Failed to load model, aborting classification"
+            logger.error(error_msg)
+            result['error'] = error_msg
+            return result
 
-            f.write("\n=== DOMINANT HAND ===\n")
-            f.write(f"{dominant_hand}\n")
+        # Find frame images in extracted_frames folder
+        frame_files = [f for f in os.listdir(frame_folder) if f.lower().endswith(('.png', '.jpg', '.jpeg'))]
+        if not frame_files:
+            error_msg = "No frame images found in highlights folder"
+            logger.warning(error_msg)
+            result['error'] = error_msg
+            return result
 
-            if feedback_data:
-                # Convert numpy types to native Python types
-                def convert_numpy_types(obj):
-                    if isinstance(obj, np.bool_):
-                        return bool(obj)
-                    elif isinstance(obj, (np.int_, np.intc, np.intp, np.int8,
-                                          np.int16, np.int32, np.int64, np.uint8,
-                                          np.uint16, np.uint32, np.uint64)):
-                        return int(obj)
-                    elif isinstance(obj, (np.float_, np.float16, np.float32, np.float64)):
-                        return float(obj)
-                    elif isinstance(obj, np.ndarray):
-                        return obj.tolist()
-                    elif isinstance(obj, dict):
-                        return {k: convert_numpy_types(v) for k, v in obj.items()}
-                    elif isinstance(obj, (list, tuple)):
-                        return [convert_numpy_types(item) for item in obj]
-                    return obj
+        # Prepare output folders
+        results_folder = os.path.join(highlights_folder, "shot_classifications")
+        landmarks_folder = os.path.join(highlights_folder, "frames_with_landmarks")
+        os.makedirs(results_folder, exist_ok=True)
+        os.makedirs(landmarks_folder, exist_ok=True)
 
-                feedback_data = convert_numpy_types(feedback_data)
-                f.write("\n=== FEEDBACK DATA ===\n")
-                f.write("Feedback data: " + json.dumps(feedback_data, indent=2) + "\n")
+        # Classify each frame using keypoints
+        results = {}
+        successful_predictions = 0
 
-            # Ensure data is written to disk
-            f.flush()
-            os.fsync(f.fileno())
+        for frame_file in frame_files:
+            frame_path = os.path.join(frame_folder, frame_file)
+            top_predictions = predict_top_shots_from_keypoints(model, frame_path, class_names, top_n=3)
 
-        print(f"[SUCCESS] Report file written successfully to {report_path}")
+            if top_predictions and top_predictions[0][0] != "Error":
+                successful_predictions += 1
+                weighted_pred = calculate_weighted_prediction(top_predictions)
+                results[frame_path] = (top_predictions, weighted_pred)
+
+        if successful_predictions == 0:
+            error_msg = "No frames could be successfully processed"
+            logger.error(error_msg)
+            result['error'] = error_msg
+            return result
+
+        # Update processing stats
+        result['processing_stats'] = {
+            'total_frames': len(frame_files),
+            'successful_predictions': successful_predictions,
+            'failed_predictions': len(frame_files) - successful_predictions,
+            'landmark_frames_saved': 0
+        }
+
+        # Get top 3 frames with highest confidence and save them with landmarks
+        top_frames = get_top_confidence_frames(results, top_n=3)
+        logger.info(f"Saving top {len(top_frames)} frames with landmarks")
+
+        saved_landmark_frames = []
+        for i, (frame_path, confidence) in enumerate(top_frames, 1):
+            frame_filename = os.path.basename(frame_path)
+            name, ext = os.path.splitext(frame_filename)
+            landmark_filename = f"top_{i}_{name}_landmarks{ext}"
+            landmark_path = os.path.join(landmarks_folder, landmark_filename)
+
+            if save_frame_with_landmarks(frame_path, landmark_path, confidence):
+                saved_landmark_frames.append(landmark_path)
+                logger.info(f"Saved landmark frame {i}: {landmark_filename} (confidence: {confidence:.2%})")
+                result['processing_stats']['landmark_frames_saved'] += 1
+
+        # Generate initial final prediction
+        initial_final_prediction = combine_frame_predictions(results)
+        result['initial_prediction'] = initial_final_prediction
+
+        # Apply further classification to get the final stroke name
+        final_stroke_name = apply_further_classification(
+            initial_final_prediction,
+            output_folder,
+            video_path  # Pass the video_path
+        )
+        logger.info(f"Final stroke name: {final_stroke_name}")
+        result['final_stroke_name'] = final_stroke_name
+
+        # Process feedback if the stroke is Front Foot Defence or Back Foot Defence
+        feedback_data = []
+        if "front foot defence" in final_stroke_name.lower():
+            logger.info("Processing feedback for Front Foot Defence")
+            try:
+                feedback_data = process_forward_defence_feedback(highlights_folder, output_folder)
+            except Exception as e:
+                logger.error(f"Failed to process feedback: {e}")
+
+        if final_stroke_name.lower() == "back foot defence":
+            logger.info("Processing feedback for Back Foot Defence")
+            try:
+                feedback_data = process_backward_defence_feedback(highlights_folder, output_folder)
+            except Exception as e:
+                logger.error(f"Failed to process feedback: {e}")
+
+        result['feedback_data'] = feedback_data
+
+        # Use the new result writer module
+        result.update(write_classification_results(
+            result,
+            results,
+            top_frames,
+            initial_final_prediction,
+            final_stroke_name,
+            dominant_hand,
+            feedback_data,
+            os.path.join(highlights_folder, "shot_classifications")
+        ))
+
     except Exception as e:
-        print(f"[ERROR] Failed to write report file: {e}")
-        raise
+        error_msg = f"Classification failed: {str(e)}"
+        logger.error(error_msg)
+        logger.error(traceback.format_exc())
+        result['error'] = error_msg
+        return result
 
-    logger.info(f"Classification complete. Results saved to {results_folder}")
-    return {
-        'frame_predictions': results,
-        'initial_prediction': initial_final_prediction,
-        'final_stroke_name': final_stroke_name,
-        'dominant_hand': dominant_hand,
-        'feedback_data': feedback_data,
-        'report_path': report_path,
-        'highlight_clip_path': clip_path
-    }
+    return result
