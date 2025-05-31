@@ -202,7 +202,7 @@ def process_backfoot_heel_position(
         # Generate feedback text
         feedback_text = "When playing forward defence the backfoot heel should lift to maintain a proper balance."
         if selected_frame['heel_lifted']:
-            feedback_text += " When considering your backfoot it seems the heel is lifted. Nice work!"
+            feedback_text += " When considering your back foot, it seems the heel is lifted. Nice work!"
         else:
             feedback_text += " But when considering your backfoot, it doesn't seem like the heel is lifting enough."
 

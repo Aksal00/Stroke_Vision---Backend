@@ -43,18 +43,6 @@ def crop_and_save_image(
         # Process the image and detect pose landmarks
         results = pose.process(img_rgb)
 
-        # Draw landmarks and connections on the image
-        if results.pose_landmarks:
-            # Draw landmarks with custom styling
-            mp_drawing.draw_landmarks(
-                img,
-                results.pose_landmarks,
-                mp_pose.POSE_CONNECTIONS,
-                landmark_drawing_spec=mp_drawing.DrawingSpec(
-                    color=(0, 255, 0), thickness=3, circle_radius=3),
-                connection_drawing_spec=mp_drawing.DrawingSpec(
-                    color=(255, 0, 0), thickness=2)
-            )
 
         # Get image dimensions
         h, w = img.shape[:2]
