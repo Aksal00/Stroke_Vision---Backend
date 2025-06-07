@@ -10,7 +10,11 @@ import sys
 from ...ref_images import ForwardDefence_Frontfoot_Knee_ref_images
 
 def get_mediapipe_landmarks(frame_path: str, pose) -> Dict[str, Any]:
+    """
+    Get MediaPipe landmarks from background-removed image for analysis
+    """
     try:
+        # Read the background-removed image for calculations
         image = cv2.imread(frame_path)
         if image is None:
             print(f"[ERROR] Could not read image: {frame_path}")
@@ -57,8 +61,10 @@ def get_mediapipe_landmarks(frame_path: str, pose) -> Dict[str, Any]:
         print(f"[ERROR] Failed to get landmarks: {e}")
         return None
 
-
 def analyze_frontfoot_knee(frame_path: str, pose) -> Tuple[Dict[str, Any], Dict[str, Any], bool]:
+    """
+    Analyze frontfoot knee position using background-removed image
+    """
     frame_data = get_mediapipe_landmarks(frame_path, pose)
     if not frame_data:
         return None, None, None
@@ -79,8 +85,10 @@ def analyze_frontfoot_knee(frame_path: str, pose) -> Tuple[Dict[str, Any], Dict[
 
     return frontfoot, frame_data, is_frontfoot_right
 
-
 def calculate_knee_bend_angle(frontfoot: Dict[str, Any]) -> float:
+    """
+    Calculate knee bend angle using coordinates from background-removed image
+    """
     hip = np.array(frontfoot['hip'])
     knee = np.array(frontfoot['knee'])
     ankle = np.array(frontfoot['ankle'])
@@ -97,7 +105,6 @@ def calculate_knee_bend_angle(frontfoot: Dict[str, Any]) -> float:
     angle = np.degrees(np.arccos(dot_product / magnitude_product))
     return angle
 
-
 def create_frontfoot_knee_feedback_image(
         highlights_folder: str,
         frame_file: str,
@@ -105,14 +112,27 @@ def create_frontfoot_knee_feedback_image(
         feedback_images_dir: str,
         is_left_handed: bool = False
 ) -> str:
+    """
+    Create feedback image using original frame with background
+    """
     try:
-        frame_path = os.path.join(highlights_folder, frame_file)
+        # Get the path to the original frame with background in the for_feedback_output folder
+        feedback_output_folder = os.path.join(os.path.dirname(os.path.dirname(highlights_folder)),
+                                            "for_feedback_output")
+        frame_path = os.path.join(feedback_output_folder, frame_file)
+
+        if not os.path.exists(frame_path):
+            # Fallback to the processed frame if original not found
+            frame_path = os.path.join(highlights_folder, frame_file)
+            print(f"[WARNING] Original frame with background not found, using processed frame: {frame_file}")
+
+        # Get coordinates from analysis (same for both images)
         ankle_x, ankle_y = frontfoot['ankle']
         knee_x, knee_y = frontfoot['knee']
 
         knee_ankle_dist = np.sqrt((knee_x - ankle_x) ** 2 + (knee_y - ankle_y) ** 2)
         crop_size = int(2 * knee_ankle_dist)
-        crop_size = max(crop_size, 100)
+        crop_size = max(crop_size, 100)  # Ensure minimum size
 
         return crop_and_save_image(
             original_image_path=frame_path,
@@ -126,7 +146,6 @@ def create_frontfoot_knee_feedback_image(
         print(f"[ERROR] Failed to create feedback image: {e}")
         return ""
 
-
 def process_frontfoot_knee_position(
         highlights_folder: str,
         frame_files: List[str],
@@ -134,9 +153,14 @@ def process_frontfoot_knee_position(
         feedback_images_dir: str,
         is_left_handed: bool = False
 ) -> Dict[str, Any]:
+    """
+    Main function to process frontfoot knee position analysis
+    Uses background-removed images for calculations but original images for feedback
+    """
     try:
         valid_frontfoot_data = []
 
+        # Process frames without background for calculations
         for frame_file in frame_files:
             frame_path = os.path.join(highlights_folder, frame_file)
             frontfoot, frame_data, is_frontfoot_right = analyze_frontfoot_knee(frame_path, pose)
@@ -161,12 +185,15 @@ def process_frontfoot_knee_position(
                 "is_ideal": False
             }
 
+        # Select frame with maximum ankle x position (most forward frontfoot)
         selected_frame = max(valid_frontfoot_data, key=lambda x: x['ankle_x'])
         frontfoot = selected_frame['frontfoot']
 
+        # Calculate knee bend angle
         angle = calculate_knee_bend_angle(frontfoot)
         is_ideal = 40 <= angle <= 120
 
+        # Generate feedback text
         feedback_text = "Your front knee should be bent to lower your body and get your head over the ball. "
         feedback_text += "This helps with control and makes it easier to smother any bounce or movement off the pitch. "
 
@@ -177,6 +204,7 @@ def process_frontfoot_knee_position(
         else:
             feedback_text += "Your knee is too straight. Try bending it more for better control."
 
+        # Create feedback image using original frame with background
         image_filename = create_frontfoot_knee_feedback_image(
             highlights_folder,
             selected_frame['frame_file'],

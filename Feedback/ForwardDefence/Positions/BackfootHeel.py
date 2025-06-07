@@ -7,6 +7,7 @@ import uuid
 from ...image_utils import crop_and_save_image
 from ...ref_images import ForwardDefence_Backfoot_Heel_ref_images
 
+
 def get_mediapipe_landmarks(frame_path: str, pose) -> Dict[str, Any]:
     """
     Get MediaPipe landmarks from an image frame
@@ -112,10 +113,19 @@ def create_backfoot_heel_feedback_image(
         is_left_handed: bool = False
 ) -> str:
     """
-    Create feedback image for backfoot analysis and return its filename
+    Create feedback image for backfoot analysis using the original frame with background
+    and return its filename
     """
     try:
-        frame_path = os.path.join(highlights_folder, frame_file)
+        # Get the path to the original frame with background in the for_feedback_output folder
+        feedback_output_folder = os.path.join(os.path.dirname(os.path.dirname(highlights_folder)),
+                                              "for_feedback_output")
+        frame_path = os.path.join(feedback_output_folder, frame_file)
+
+        if not os.path.exists(frame_path):
+            # Fallback to the processed frame if original not found
+            frame_path = os.path.join(highlights_folder, frame_file)
+            print(f"[WARNING] Original frame with background not found, using processed frame: {frame_file}")
 
         # Get coordinates in pixels
         ankle_x, ankle_y = backfoot['ankle']
@@ -153,6 +163,7 @@ def process_backfoot_heel_position(
     try:
         valid_backfoot_data = []
 
+        # Process frames without background for calculations
         for frame_file in frame_files:
             frame_path = os.path.join(highlights_folder, frame_file)
             backfoot, frame_data, heel_lifted = analyze_backfoot_heel(frame_path, pose)
@@ -190,7 +201,7 @@ def process_backfoot_heel_position(
             )
             is_ideal = False
 
-        # Create feedback image
+        # Create feedback image using the original frame with background
         image_filename = create_backfoot_heel_feedback_image(
             highlights_folder,
             selected_frame['frame_file'],

@@ -1,31 +1,15 @@
-import os
 import shutil
-
-import cv2
-import pandas as pd
-import mediapipe as mp
 import logging
-import numpy as np
-from typing import List, Dict, Any, Optional, Tuple
-from scipy.spatial import distance
-
-from background_remover import process_frame_with_grey_background
-from video_analyzer import select_valid_frames
-
-# Configure logging
-logger = logging.getLogger(__name__)
-
-
 import os
 import cv2
-import pandas as pd
 import mediapipe as mp
-import logging
 import numpy as np
 from typing import List, Dict, Any, Optional, Tuple
 from scipy.spatial import distance
 from rembg import remove
 from PIL import Image
+from background_remover import process_frame_with_grey_background
+from video_analyzer import select_valid_frames
 
 # Configure logging
 logger = logging.getLogger(__name__)
@@ -39,7 +23,8 @@ def export_highlight_frames(
         dominant_hand: str
 ) -> bool:
     """
-    Export highlight frames based on wrist movement analysis with background removal and grey background
+    Export highlight frames based on wrist movement analysis with background removal and grey background.
+    Also stores original frames with background in a separate folder for feedback.
 
     Args:
         video_path: Original video path
@@ -59,6 +44,10 @@ def export_highlight_frames(
         # Create folder for extracted frames
         frames_folder = os.path.join(highlights_folder, "extracted_frames")
         os.makedirs(frames_folder, exist_ok=True)
+
+        # Create folder for feedback output (original frames with background)
+        feedback_folder = os.path.join(output_folder, "for_feedback_output")
+        os.makedirs(feedback_folder, exist_ok=True)
 
         # Create temp folder for processing
         temp_folder = os.path.join(highlights_folder, "temp_processing")
@@ -215,9 +204,14 @@ def export_highlight_frames(
                 img_filename = f"highlight_{i + 1}_{dominant_direction}_{dominant_hand}.jpg"
                 temp_path = os.path.join(temp_folder, img_filename)
                 final_path = os.path.join(frames_folder, img_filename)
+                feedback_path = os.path.join(feedback_folder, img_filename)
 
                 # Save original to temp
                 cv2.imwrite(temp_path, frame)
+
+                # Save original frame with background to feedback folder
+                cv2.imwrite(feedback_path, frame)
+                logger.info(f"Saved original frame with background for feedback: {feedback_path}")
 
                 # Process with background removal and grey background
                 if process_frame_with_grey_background(temp_path, final_path):

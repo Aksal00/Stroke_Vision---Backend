@@ -91,7 +91,16 @@ def create_top_arm_feedback_image(
         is_left_handed: bool = False
 ) -> str:
     try:
-        frame_path = os.path.join(highlights_folder, frame_file)
+        # First try to get the original frame with background from for_feedback_output folder
+        feedback_output_folder = os.path.join(os.path.dirname(os.path.dirname(highlights_folder)),
+                                              "for_feedback_output")
+        frame_path = os.path.join(feedback_output_folder, frame_file)
+
+        if not os.path.exists(frame_path):
+            # Fallback to the processed frame if original not found
+            frame_path = os.path.join(highlights_folder, frame_file)
+            print(f"[WARNING] Original frame with background not found, using processed frame: {frame_file}")
+
         elbow_x, elbow_y = top_arm['elbow']
         shoulder_x, shoulder_y = top_arm['shoulder']
 

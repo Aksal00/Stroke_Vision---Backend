@@ -6,6 +6,8 @@ from typing import Dict, Any, Tuple, List
 import uuid
 from ...image_utils import crop_and_save_image
 from ...ref_images import ForwardDefence_Hand_ref_images
+
+
 def get_mediapipe_hand_landmarks(frame_path: str, pose) -> Dict[str, Any]:
     """
     Get MediaPipe landmarks for hands from an image frame
@@ -85,20 +87,29 @@ def create_hand_position_feedback_image(
         is_left_handed: bool = False
 ) -> str:
     """
-    Create feedback image for hand position analysis and return its filename
+    Create feedback image for hand position analysis using the original frame with background
+    and return its filename
     Args:
-        highlights_folder: Path to folder containing the frame
+        highlights_folder: Path to folder containing the processed frame
         frame_file: Filename of the frame
-        bottom_hand: Dictionary containing bottom hand landmarks
+        bottom_hand: Dictionary containing bottom hand landmarks (from processed frame)
         feedback_images_dir: Directory to save feedback images
         is_left_handed: Whether player is left-handed (for mirroring)
     Returns:
         Filename of the saved feedback image
     """
     try:
-        frame_path = os.path.join(highlights_folder, frame_file)
+        # Get the path to the original frame with background in the for_feedback_output folder
+        feedback_output_folder = os.path.join(os.path.dirname(os.path.dirname(highlights_folder)),
+                                              "for_feedback_output")
+        frame_path = os.path.join(feedback_output_folder, frame_file)
 
-        # Get coordinates in pixels
+        if not os.path.exists(frame_path):
+            # Fallback to the processed frame if original not found
+            frame_path = os.path.join(highlights_folder, frame_file)
+            print(f"[WARNING] Original frame with background not found, using processed frame: {frame_file}")
+
+        # Get coordinates in pixels (from processed frame analysis)
         wrist_x, wrist_y = bottom_hand['wrist']
         elbow_x, elbow_y = bottom_hand['elbow']
 
@@ -137,6 +148,7 @@ def process_hand_positions(
     try:
         valid_hand_data = []
 
+        # Process frames without background for calculations
         for frame_file in frame_files:
             frame_path = os.path.join(highlights_folder, frame_file)
             hand_data, frame_data, is_left_top_hand = analyze_hand_positions(frame_path, pose)
@@ -155,7 +167,7 @@ def process_hand_positions(
                 "title": "Hand Position Analysis",
                 "image_filename": "",
                 "feedback_text": "Player hand positions didn't recognize correctly. Please ensure proper posture for accurate analysis.",
-                "ref-images": ForwardDefence_Hand_ref_images,  # Updated to use imported array
+                "ref-images": ForwardDefence_Hand_ref_images,
                 "is_ideal": False
             }
 
@@ -191,7 +203,7 @@ def process_hand_positions(
         else:
             feedback_text += " When playing forward defence, your bat should angle down to reduce chances of being caught by near fielders. It seems your bat is not angling down."
 
-        # Create feedback image
+        # Create feedback image using the original frame with background
         image_filename = create_hand_position_feedback_image(
             highlights_folder=highlights_folder,
             frame_file=selected_frame['frame_file'],
@@ -205,7 +217,7 @@ def process_hand_positions(
             "title": "Hand Position Analysis",
             "image_filename": image_filename,
             "feedback_text": feedback_text,
-            "ref-images": ["HandGrip.png", "BatAngle.png"],
+            "ref-images": ForwardDefence_Hand_ref_images,
             "is_ideal": is_ideal
         }
 

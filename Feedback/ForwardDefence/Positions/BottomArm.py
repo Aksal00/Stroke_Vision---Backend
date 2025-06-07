@@ -10,11 +10,11 @@ from ...ref_images import ForwardDefence_BottomArm_ref_images
 
 def get_bottom_arm_landmarks(frame_path: str, pose) -> Dict[str, Any]:
     """
-    Get MediaPipe landmarks for bottom arm analysis
+    Get MediaPipe landmarks for bottom arm analysis from background-removed image
     Returns landmarks for shoulder, elbow, and wrist of the bottom arm
     """
     try:
-        # Read the image
+        # Read the image (background removed version)
         image = cv2.imread(frame_path)
         if image is None:
             print(f"[ERROR] Could not read image: {frame_path}")
@@ -61,7 +61,6 @@ def get_bottom_arm_landmarks(frame_path: str, pose) -> Dict[str, Any]:
         print(f"[ERROR] Failed to get arm landmarks: {e}")
         return None
 
-
 def calculate_arm_bend_angle(shoulder: Tuple[float, float],
                              elbow: Tuple[float, float],
                              wrist: Tuple[float, float]) -> float:
@@ -92,10 +91,9 @@ def calculate_arm_bend_angle(shoulder: Tuple[float, float],
 
     return angle_deg
 
-
 def analyze_bottom_arm_bend(frame_path: str, pose) -> Tuple[Dict[str, Any], Dict[str, Any], bool]:
     """
-    Analyze bottom arm bend for a single frame
+    Analyze bottom arm bend for a single frame using background-removed image
     Returns:
         - bottom_arm data (shoulder, elbow, wrist)
         - frame data
@@ -137,7 +135,6 @@ def analyze_bottom_arm_bend(frame_path: str, pose) -> Tuple[Dict[str, Any], Dict
 
     return bottom_arm, frame_data, is_bottom_arm_right
 
-
 def create_bottom_arm_feedback_image(
         highlights_folder: str,
         frame_file: str,
@@ -147,9 +144,18 @@ def create_bottom_arm_feedback_image(
 ) -> str:
     """
     Create feedback image for bottom arm analysis centered around the elbow
+    Uses the original frame with background from for_feedback_output folder
     """
     try:
-        frame_path = os.path.join(highlights_folder, frame_file)
+        # Get the path to the original frame with background in the for_feedback_output folder
+        feedback_output_folder = os.path.join(os.path.dirname(os.path.dirname(highlights_folder)),
+                                            "for_feedback_output")
+        frame_path = os.path.join(feedback_output_folder, frame_file)
+
+        if not os.path.exists(frame_path):
+            # Fallback to the processed frame if original not found
+            frame_path = os.path.join(highlights_folder, frame_file)
+            print(f"[WARNING] Original frame with background not found, using processed frame: {frame_file}")
 
         # Get coordinates in pixels
         shoulder_x, shoulder_y = bottom_arm['shoulder']
@@ -172,7 +178,6 @@ def create_bottom_arm_feedback_image(
         print(f"[ERROR] Failed to create feedback image: {e}")
         return ""
 
-
 def process_bottom_arm_bend(
         highlights_folder: str,
         frame_files: List[str],
@@ -182,6 +187,7 @@ def process_bottom_arm_bend(
 ) -> Dict[str, Any]:
     """
     Main function to process bottom arm bend analysis
+    Uses background-removed images for calculations but original images for feedback
     Returns feedback dictionary with analysis results
     """
     try:
@@ -211,7 +217,7 @@ def process_bottom_arm_bend(
                 "title": "Bottom Arm Bend Analysis",
                 "image_filename": "",
                 "feedback_text": "Player's bottom arm position wasn't recognized correctly. Please ensure proper posture for accurate analysis.",
-                "ref-images": ForwardDefence_BottomArm_ref_images,  # Updated to use imported array
+                "ref-images": ForwardDefence_BottomArm_ref_images,
                 "is_ideal": False
             }
 
@@ -249,7 +255,7 @@ def process_bottom_arm_bend(
                          "the shot soft and defensive. Slightly bent arms also promote playing with relaxed hands, " \
                          "which is key to avoiding edges carrying to slip fielders."
 
-        # Create feedback image
+        # Create feedback image using original frame with background
         image_filename = create_bottom_arm_feedback_image(
             highlights_folder,
             selected_frame['frame_file'],
@@ -263,7 +269,7 @@ def process_bottom_arm_bend(
             "title": "Bottom Arm Bend Analysis",
             "image_filename": image_filename,
             "feedback_text": feedback_text,
-            "ref-images": ["BottomArm.png", "HandPosition.png"],
+            "ref-images": ForwardDefence_BottomArm_ref_images,
             "is_ideal": is_ideal,
             "angle": angle
         }

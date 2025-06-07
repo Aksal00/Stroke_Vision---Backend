@@ -9,10 +9,11 @@ from ...ref_images import ForwardDefence_Head_ref_images
 
 def get_mediapipe_head_landmarks(frame_path: str, pose) -> Dict[str, Any]:
     """
-    Get MediaPipe landmarks for head position analysis
+    Get MediaPipe landmarks for head position analysis from background-removed image
     Returns landmarks for head, ears, nose, and relevant body parts
     """
     try:
+        # Read the background-removed image for calculations
         image = cv2.imread(frame_path)
         if image is None:
             print(f"[ERROR] Could not read image: {frame_path}")
@@ -51,10 +52,9 @@ def get_mediapipe_head_landmarks(frame_path: str, pose) -> Dict[str, Any]:
         print(f"[ERROR] Failed to get head landmarks: {e}")
         return None
 
-
 def analyze_head_position(frame_path: str, pose) -> Tuple[Dict[str, Any], Dict[str, Any]]:
     """
-    Analyze head position for a single frame
+    Analyze head position for a single frame using background-removed image
     Returns:
         - head_data (with analysis results)
         - frame_data (raw landmarks)
@@ -78,7 +78,6 @@ def analyze_head_position(frame_path: str, pose) -> Tuple[Dict[str, Any], Dict[s
 
     return head_data, frame_data
 
-
 def create_head_position_feedback_image(
         highlights_folder: str,
         frame_file: str,
@@ -88,21 +87,20 @@ def create_head_position_feedback_image(
         is_left_handed: bool = False
 ) -> str:
     """
-    Create feedback image for head position analysis and return its filename
-    Args:
-        highlights_folder: Path to folder containing the frame
-        frame_file: Filename of the frame
-        left_shoulder: Tuple of (x,y) coordinates for left shoulder
-        left_ankle: Tuple of (x,y) coordinates for left ankle
-        feedback_images_dir: Directory to save feedback images
-        is_left_handed: Whether player is left-handed (for mirroring)
-    Returns:
-        Filename of the saved feedback image
+    Create feedback image for head position analysis using original frame with background
     """
     try:
-        frame_path = os.path.join(highlights_folder, frame_file)
+        # Get the path to the original frame with background in the for_feedback_output folder
+        feedback_output_folder = os.path.join(os.path.dirname(os.path.dirname(highlights_folder)),
+                                            "for_feedback_output")
+        frame_path = os.path.join(feedback_output_folder, frame_file)
 
-        # Calculate distance between shoulder and ankle
+        if not os.path.exists(frame_path):
+            # Fallback to the processed frame if original not found
+            frame_path = os.path.join(highlights_folder, frame_file)
+            print(f"[WARNING] Original frame with background not found, using processed frame: {frame_file}")
+
+        # Calculate distance between shoulder and ankle (using coordinates from analysis)
         shoulder_x, shoulder_y = left_shoulder
         ankle_x, ankle_y = left_ankle
         shoulder_ankle_dist = np.sqrt((shoulder_x - ankle_x) ** 2 + (shoulder_y - ankle_y) ** 2)
@@ -124,7 +122,6 @@ def create_head_position_feedback_image(
         print(f"[ERROR] Failed to create feedback image: {e}")
         return ""
 
-
 def process_head_position(
         highlights_folder: str,
         frame_files: List[str],
@@ -134,11 +131,13 @@ def process_head_position(
 ) -> Dict[str, Any]:
     """
     Main function to process head position analysis
+    Uses background-removed images for calculations but original images for feedback
     Returns feedback dictionary with analysis results
     """
     try:
         head_data_list = []
 
+        # Process frames without background for calculations
         for frame_file in frame_files:
             frame_path = os.path.join(highlights_folder, frame_file)
             head_data, frame_data = analyze_head_position(frame_path, pose)
@@ -157,9 +156,10 @@ def process_head_position(
                 "title": "Head Position Analysis",
                 "image_filename": "",
                 "feedback_text": "Player head position didn't recognize correctly. Please ensure proper posture for accurate analysis.",
-                "ref-images": ForwardDefence_Head_ref_images,  # Updated to use imported array
+                "ref-images": ForwardDefence_Head_ref_images,
                 "is_ideal": False
             }
+
         # Select frame with most right-side nose position
         selected_frame = max(head_data_list, key=lambda x: x['nose_x'])
         head_data = selected_frame['head_data']
@@ -179,18 +179,18 @@ def process_head_position(
         # Check head position relative to front knee
         if is_over_front_knee:
             feedback_text += (" Your head is correctly positioned over your front knee when defending. "
-                              "This puts your weight over the ball, helping you: \n"
-                              "1. Control the shot better\n"
-                              "2. Judge the line and length more accurately\n"
-                              "3. Maintain balance\n"
-                              "4. Prevent edges\n")
+                            "This puts your weight over the ball, helping you: \n"
+                            "1. Control the shot better\n"
+                            "2. Judge the line and length more accurately\n"
+                            "3. Maintain balance\n"
+                            "4. Prevent edges\n")
         else:
             feedback_text += (" Your head should come over or slightly ahead of your front knee when defending. "
-                              "This helps with:\n"
-                              "1. Putting weight over the ball for better control\n"
-                              "2. Judging line and length more accurately\n"
-                              "3. Maintaining proper balance\n"
-                              "4. Reducing chances of edging the ball\n")
+                            "This helps with:\n"
+                            "1. Putting weight over the ball for better control\n"
+                            "2. Judging line and length more accurately\n"
+                            "3. Maintaining proper balance\n"
+                            "4. Reducing chances of edging the ball\n")
 
         # Check if player is looking down
         if is_looking_down:
@@ -198,7 +198,7 @@ def process_head_position(
         else:
             feedback_text += " It seems you're not looking down at the ball. Focus on watching the ball closely until the moment of contact."
 
-        # Create feedback image
+        # Create feedback image using original frame with background
         image_filename = create_head_position_feedback_image(
             highlights_folder,
             selected_frame['frame_file'],
@@ -213,7 +213,7 @@ def process_head_position(
             "title": "Head Position Analysis",
             "image_filename": image_filename,
             "feedback_text": feedback_text,
-            "ref-images": ["HeadPosition.png", "Stance.png"],
+            "ref-images": ForwardDefence_Head_ref_images,
             "is_ideal": is_ideal
         }
 
